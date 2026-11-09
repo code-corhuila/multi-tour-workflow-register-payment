@@ -1,0 +1,1 @@
+ALTER TABLE workflow_register_payment.register_payment_saga_step DROP CONSTRAINT IF EXISTS fk_register_payment_saga_step_saga;
