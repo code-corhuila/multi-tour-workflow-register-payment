@@ -16,7 +16,7 @@ const (
 	defaultStepAttempts = 3
 	maxStepTimeout      = 30 * time.Second
 	maxStepAttempts     = 5
-	// a saga calls the participants at most four times: create tenant, create account, record, undo tenant
+	// a saga calls the participants at most three times: record the income, record the payment, reverse the income; one more is a margin
 	callsPerSaga = 4
 	// settling time added to the arithmetic bound: database saves between steps and the waits between attempts
 	sagaMargin = 10 * time.Second
