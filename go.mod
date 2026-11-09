@@ -2,7 +2,10 @@ module github.com/code-corhuila/multi-tour-workflow-register-payment
 
 go 1.26
 
-require github.com/jackc/pgx/v5 v5.12.0
+require (
+	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/jackc/pgx/v5 v5.12.0
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
