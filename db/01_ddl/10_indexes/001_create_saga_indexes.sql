@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS idx_register_payment_saga_status_updated_at ON workflow_register_payment.register_payment_saga (saga_status, updated_at);
