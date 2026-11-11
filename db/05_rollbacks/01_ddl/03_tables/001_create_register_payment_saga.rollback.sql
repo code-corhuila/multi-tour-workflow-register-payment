@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS workflow_register_payment.register_payment_saga_step;
+DROP TABLE IF EXISTS workflow_register_payment.register_payment_saga;
