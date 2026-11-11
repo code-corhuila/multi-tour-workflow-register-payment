@@ -23,7 +23,7 @@ In PostgreSQL, schema `workflow_register_payment` of the single instance (ADR-00
 
 ## What is missing
 
-Task WF2-01 gives the configuration and the health of the service, then the schema and the domain of the saga. The steps, the participant clients and the entry route (`POST /api/v1/sagas/register-payment`) are tasks WF2-02 and WF2-03.
+The steps, the participant clients and the entry route (`POST /api/v1/sagas/register-payment`) are tasks WF2-02 and WF2-03; the domain of the saga is part 3 of WF2-01.
 
 ## Branching
 

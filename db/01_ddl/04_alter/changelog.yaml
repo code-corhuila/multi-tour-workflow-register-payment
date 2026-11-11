@@ -1,0 +1,52 @@
+databaseChangeLog:
+  - changeSet:
+      id: register-payment-ddl-alter-001
+      author: FernandaRobayo
+      labels: "HU-WFL-002,ddl,alter"
+      comment: "The foreign key inside the schema, with its ON DELETE."
+      changes:
+        - sqlFile:
+            path: 001_add_saga_step_foreign_key.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/001_add_saga_step_foreign_key.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
+  - changeSet:
+      id: register-payment-ddl-alter-002
+      author: FernandaRobayo
+      labels: "HU-WFL-002,ddl,alter"
+      comment: "What a restart needs to finish step 3 and to compensate: who asked, the payment to record and the cash movement of step 1."
+      changes:
+        - sqlFile:
+            path: 002_add_saga_resume_data.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/002_add_saga_resume_data.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
+  - changeSet:
+      id: register-payment-ddl-alter-003
+      author: FernandaRobayo
+      labels: "HU-WFL-002,ddl,alter"
+      comment: "The version of a saga: a save compares and raises it, a claim of a stale saga raises it (debt F3)."
+      changes:
+        - sqlFile:
+            path: 003_add_saga_version.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/003_add_saga_version.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false

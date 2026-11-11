@@ -1,0 +1,5 @@
+REVOKE workflow_register_payment_writer FROM workflow_register_payment_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA workflow_register_payment REVOKE SELECT, INSERT, UPDATE ON TABLES FROM workflow_register_payment_writer;
+ALTER DEFAULT PRIVILEGES IN SCHEMA workflow_register_payment REVOKE SELECT ON TABLES FROM workflow_register_payment_reader;
+REVOKE ALL ON ALL TABLES IN SCHEMA workflow_register_payment FROM workflow_register_payment_reader, workflow_register_payment_writer;
+REVOKE ALL ON SCHEMA workflow_register_payment FROM workflow_register_payment_reader, workflow_register_payment_writer;
