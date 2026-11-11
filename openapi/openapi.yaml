@@ -1,0 +1,192 @@
+openapi: 3.0.3
+info:
+  title: Multitour saga register-payment
+  version: 0.1.0
+  description: >
+    Entry of the saga that registers a payment in the cash and in the reservation (ADR-004 D3, HU-WFL-002): a Tenant
+    Administrator, or an Operational Collaborator with VALIDATE_PAYMENT_PROOFS (transfer) or MANAGE_CASH (cash), starts it
+    and reads its state. The tenant and the person come from the token; the body has neither. Every error uses the single
+    envelope below and never carries the internal detail of a failure; the detail stays in the saga state and the log.
+paths:
+  /api/v1/sagas/register-payment:
+    post:
+      summary: Register a payment in the cash and in the reservation
+      description: >
+        Step 1 records the income in the cash, step 2 records the validated payment in the reservation. If step 2 is
+        refused, the income is reversed with a compensating movement and the saga ends COMPENSATED; an unknown outcome of
+        step 2 ends FAILED for a person to decide. Repeating the same Idempotency-Key returns the same saga with 200 and
+        runs no step.
+      operationId: startRegisterPayment
+      tags: [Sagas]
+      x-hu: HU-WFL-002
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartRegisterPaymentRequest"
+      responses:
+        "201":
+          description: The saga started
+          headers:
+            Location:
+              description: URL of the saga
+              schema:
+                type: string
+            X-Correlation-Id:
+              $ref: "#/components/headers/CorrelationId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Saga"
+        "200":
+          description: The Idempotency-Key was already used; the existing saga
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/CorrelationId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Saga"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /api/v1/sagas/register-payment/{id}:
+    get:
+      summary: Read the state of a payment registration
+      description: A saga of another tenant answers 404, as an unknown one does.
+      operationId: getRegisterPayment
+      tags: [Sagas]
+      x-hu: HU-WFL-002
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The saga
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/CorrelationId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Saga"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+  headers:
+    CorrelationId:
+      description: Reused from the request or generated
+      schema:
+        type: string
+  responses:
+    Error:
+      description: Error envelope
+      headers:
+        X-Correlation-Id:
+          $ref: "#/components/headers/CorrelationId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    StartRegisterPaymentRequest:
+      type: object
+      required: [reservationId, paymentId, paymentMedium, amountCents, businessDate, concept]
+      additionalProperties: false
+      properties:
+        reservationId:
+          type: string
+          format: uuid
+        paymentId:
+          type: string
+          format: uuid
+        paymentMedium:
+          type: string
+          enum: [CASH, TRANSFER]
+        amountCents:
+          type: integer
+          format: int64
+          minimum: 1
+        businessDate:
+          type: string
+          format: date
+        concept:
+          type: string
+          minLength: 1
+          maxLength: 200
+    Saga:
+      type: object
+      required: [id, status, completedSteps, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [RUNNING, COMPLETED, COMPENSATED, FAILED]
+        completedSteps:
+          type: array
+          items:
+            type: string
+            enum: [RECORD_CASH_INCOME, RECORD_VALIDATED_PAYMENT]
+        failedStep:
+          type: string
+          enum: [RECORD_CASH_INCOME, RECORD_VALIDATED_PAYMENT]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required: [error, message, traceId]
+      properties:
+        error:
+          type: string
+          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, INTERNAL_ERROR]
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+        traceId:
+          type: string
+security:
+  - bearerAuth: []
