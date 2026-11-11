@@ -8,3 +8,7 @@
 *.exe
 *.test
 *.out
+
+# Keys never enter this repository (security rules, Annexes G and I)
+*.key
+keys/

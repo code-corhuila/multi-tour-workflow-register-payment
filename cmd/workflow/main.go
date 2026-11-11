@@ -1,16 +1,26 @@
-// Command workflow is the composition root of the register-payment saga: it reads the configuration and serves until it is
-// told to stop. The store, the participant clients and the entry route join in tasks WF2-02 and WF2-03.
+// Command workflow is the composition root of the register-payment saga: it reads the configuration, builds the store, the
+// participant clients and the entry route, and serves until it is told to stop.
 package main
 
 import (
 	"context"
+	"crypto/rsa"
 	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/adapter/in/httpapi"
+	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/adapter/out/participants"
+	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/adapter/out/state/postgres"
+	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/application/usecase"
+	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/correlation"
 )
+
+const retryBaseDelay = 200 * time.Millisecond
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -25,26 +35,74 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	bound := sagaBound(cfg)
-	server := newServer(cfg, mux, bound)
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	key, err := readPublicKey(cfg)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.ListenAndServe() }()
-	log.Info("register-payment saga listening", "addr", cfg.listenAddr)
+
+	pool, err := postgres.Open(ctx, cfg.databaseURL, postgres.Limits{MaxConns: 10, ConnectTimeout: 5 * time.Second, StatementTimeout: 5 * time.Second})
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	participantCfg := participants.Config{Token: cfg.serviceToken, Timeout: cfg.stepTimeout, Attempts: cfg.stepAttempts, BaseDelay: retryBaseDelay}
+	bound := sagaBound(cfg)
+	register := usecase.NewRegisterPayment(postgres.NewStore(pool),
+		participants.NewCash(cfg.cashURL, participantCfg), participants.NewReservations(cfg.commercialURL, participantCfg),
+		log, correlation.NewID, time.Now, bound)
+
+	srv := newServer(cfg, httpapi.New(register, httpapi.NewVerifier(key), log), bound)
+	serving := make(chan error, 1)
+	go func() { serving <- srv.ListenAndServe() }()
+	log.Info("workflow listening", "addr", cfg.listenAddr)
+
+	// A saga not moved for longer than the saga bound cannot be a live one (every save moves it), so it is claimed and
+	// finished from its saved state; the sweep repeats every bound, so two instances never take the same saga. It runs
+	// after the listener is up, so the health check answers while the participants are still being reached.
+	resumed := make(chan struct{})
+	go func() {
+		defer close(resumed)
+		for {
+			resumeCtx, cancel := context.WithTimeout(ctx, bound)
+			if err := register.Resume(resumeCtx, time.Now().Add(-bound)); err != nil {
+				log.Error("finishing the sagas left running failed", "error", err.Error())
+			}
+			cancel()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(bound):
+			}
+		}
+	}()
 
 	select {
+	case err := <-serving:
+		return err
 	case <-ctx.Done():
-	case err := <-serverErr:
+	}
+	// stop accepting, let the running sagas answer, then close the pool (deferred)
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownGrace(bound))
+	defer cancelShutdown()
+	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace(bound))
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
+	<-resumed
+	log.Info("workflow stopped")
 	return nil
+}
+
+func readPublicKey(cfg config) (*rsa.PublicKey, error) {
+	pem := []byte(cfg.publicKey)
+	if cfg.publicKeyFile != "" {
+		data, err := os.ReadFile(cfg.publicKeyFile)
+		if err != nil {
+			return nil, errors.New("JWT_PUBLIC_KEY_FILE cannot be read")
+		}
+		pem = data
+	}
+	return httpapi.ParsePublicKey(pem)
 }
