@@ -25,6 +25,8 @@ type startRequest struct {
 	AmountCents   json.RawMessage `json:"amountCents"`
 	BusinessDate  string          `json:"businessDate"`
 	Concept       string          `json:"concept"`
+	// Reason is optional: why the verified amount differs from the one reported. Kept raw so a null or a number is refused.
+	Reason json.RawMessage `json:"reason"`
 }
 
 type fieldError struct {
@@ -57,9 +59,26 @@ func decodeStart(r *http.Request, w http.ResponseWriter) (saga.Payment, []fieldE
 	check(dateErr == nil, "businessDate", "must be a date, YYYY-MM-DD")
 	n := utf8.RuneCountInString(req.Concept)
 	check(n >= 1 && n <= 200 && strings.TrimSpace(req.Concept) != "", "concept", "must be 1 to 200 characters")
+	reason, reasonOK := decodeReason(req.Reason)
+	check(reasonOK, "reason", "when present, must be 1 to 500 characters")
 	if problems != nil {
 		return saga.Payment{}, problems
 	}
 	return saga.Payment{ReservationID: req.ReservationID, PaymentID: req.PaymentID, Medium: saga.Medium(req.PaymentMedium),
-		AmountCents: amount, BusinessDate: req.BusinessDate, Concept: req.Concept}, nil
+		AmountCents: amount, BusinessDate: req.BusinessDate, Concept: req.Concept, Reason: reason}, nil
+}
+
+// decodeReason accepts an absent reason (empty result) or a string of 1 to 500 characters after trimming; anything else,
+// null and a blank included, is refused. The trimmed text is what travels, as the commercial route compares it.
+func decodeReason(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", true
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil || string(raw) == "null" {
+		return "", false
+	}
+	text = strings.TrimSpace(text)
+	n := utf8.RuneCountInString(text)
+	return text, n >= 1 && n <= 500
 }
