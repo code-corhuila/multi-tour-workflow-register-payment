@@ -153,6 +153,12 @@ failure_detail_is_bounded() {
   refused chk_register_payment_saga_failure_detail "INSERT INTO workflow_register_payment.register_payment_saga (saga_id, idempotency_key, failure_detail) VALUES ('$S1', '$KEY1', repeat('x', 2001))" || return 1
   psql_admin -c "INSERT INTO workflow_register_payment.register_payment_saga (saga_id, idempotency_key, failure_detail) VALUES ('$S1', '$KEY1', repeat('x', 2000))" >/dev/null
 }
+reason_is_optional_and_bounded() {
+  clean
+  refused chk_register_payment_saga_reason "INSERT INTO workflow_register_payment.register_payment_saga (saga_id, idempotency_key, reason) VALUES ('$S1', '$KEY1', '   ')" || return 1
+  refused chk_register_payment_saga_reason "INSERT INTO workflow_register_payment.register_payment_saga (saga_id, idempotency_key, reason) VALUES ('$S1', '$KEY1', repeat('x', 501))" || return 1
+  psql_admin -c "INSERT INTO workflow_register_payment.register_payment_saga (saga_id, idempotency_key, reason) VALUES ('$S1', '$KEY1', repeat('x', 500))" >/dev/null
+}
 a_step_is_recorded_once_with_a_known_name_number_and_status() {
   clean; psql_admin -c "$(saga $S1 $KEY1)" -c "$(step $S1 1 RECORD_CASH_INCOME)" >/dev/null || return 1
   refused pk_register_payment_saga_step "$(step $S1 1 RECORD_CASH_INCOME)" || return 1
@@ -198,6 +204,7 @@ check "I·idempotency_key_is_unique_and_sized" idempotency_key_is_unique_and_siz
 check "I·status_is_one_of_the_four_states" status_is_one_of_the_four_states
 check "I·failed_step_goes_with_a_failed_status_and_a_known_name" failed_step_goes_with_a_failed_status_and_a_known_name
 check "I·failure_detail_is_bounded" failure_detail_is_bounded
+check "I·reason_is_optional_and_bounded" reason_is_optional_and_bounded
 check "I·a_step_is_recorded_once_with_a_known_name_number_and_status" a_step_is_recorded_once_with_a_known_name_number_and_status
 check "I·steps_follow_their_saga" steps_follow_their_saga
 check "I·the_app_user_writes_the_tables_and_the_index_exists" the_app_user_writes_the_tables_and_the_index_exists
