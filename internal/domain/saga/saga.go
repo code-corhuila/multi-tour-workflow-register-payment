@@ -62,6 +62,7 @@ type Payment struct {
 	BusinessDate  string // YYYY-MM-DD, the day of the cash
 	Concept       string
 	ApprovedBy    string // the `sub` of the person who approved or received the payment
+	Reason        string // optional: why the verified amount differs from the one reported (DP-06); empty when there is none
 }
 
 type StepState struct {

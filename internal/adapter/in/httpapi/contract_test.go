@@ -119,3 +119,21 @@ func TestC_the_request_of_the_contract_has_no_tenant_and_no_approver(t *testing.
 		t.Error("the request accepts fields the contract does not declare")
 	}
 }
+
+// HU-COM-010 DP-11: the request declares an optional reason of 1 to 500 characters, so the contract and the validation agree.
+func TestC_the_request_declares_the_optional_reason(t *testing.T) {
+	doc, err := openapi3.NewLoader().LoadFromFile("../../../../openapi/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := doc.Components.Schemas["StartRegisterPaymentRequest"].Value
+	reason := schema.Properties["reason"]
+	if reason == nil || reason.Value.Type.Slice()[0] != "string" || reason.Value.MinLength != 1 || reason.Value.MaxLength == nil || *reason.Value.MaxLength != 500 {
+		t.Fatalf("reason = %+v", reason)
+	}
+	for _, name := range schema.Required {
+		if name == "reason" {
+			t.Error("reason must stay optional")
+		}
+	}
+}

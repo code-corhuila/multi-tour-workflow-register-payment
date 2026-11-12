@@ -30,7 +30,7 @@ const (
 	sagaColumns = `saga_id::text, idempotency_key, saga_status, coalesce(tenant_id::text, ''),
 		coalesce(failed_step, ''), coalesce(failure_detail, ''), created_at, updated_at, coalesce(on_behalf_of, ''),
 		coalesce(reservation_id::text, ''), coalesce(payment_id::text, ''), coalesce(payment_medium, ''), coalesce(amount_cents, 0),
-		coalesce(business_date::text, ''), coalesce(concept, ''), coalesce(cash_movement_id::text, ''), version`
+		coalesce(business_date::text, ''), coalesce(concept, ''), coalesce(cash_movement_id::text, ''), version, coalesce(reason, '')`
 )
 
 var uuidShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -39,11 +39,11 @@ var uuidShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
 // returned with created=false; the engine makes two concurrent callers with one key take turns, so only one inserts.
 func (s *Store) Create(ctx context.Context, sg saga.Saga) (saga.Saga, bool, error) {
 	tag, err := s.pool.Exec(ctx, `INSERT INTO `+sagaTable+` (saga_id, idempotency_key, saga_status, tenant_id, created_at, updated_at,
-			on_behalf_of, reservation_id, payment_id, payment_medium, amount_cents, business_date, concept)
-		VALUES ($1::text::uuid, $2, 'RUNNING', $3::text::uuid, $4, $5, $6, $7::text::uuid, $8::text::uuid, $9, $10, $11::text::date, $12)
+			on_behalf_of, reservation_id, payment_id, payment_medium, amount_cents, business_date, concept, reason)
+		VALUES ($1::text::uuid, $2, 'RUNNING', $3::text::uuid, $4, $5, $6, $7::text::uuid, $8::text::uuid, $9, $10, $11::text::date, $12, nullif($13::text, ''))
 		ON CONFLICT ON CONSTRAINT uq_register_payment_saga_idempotency_key DO NOTHING`,
 		sg.ID, sg.IdempotencyKey, sg.TenantID, sg.CreatedAt, sg.UpdatedAt, sg.OnBehalfOf, sg.Payment.ReservationID,
-		sg.Payment.PaymentID, string(sg.Payment.Medium), sg.Payment.AmountCents, sg.Payment.BusinessDate, sg.Payment.Concept)
+		sg.Payment.PaymentID, string(sg.Payment.Medium), sg.Payment.AmountCents, sg.Payment.BusinessDate, sg.Payment.Concept, sg.Payment.Reason)
 	if err != nil {
 		return saga.Saga{}, false, err
 	}
@@ -158,7 +158,7 @@ func (s *Store) load(ctx context.Context, where string, args ...any) ([]saga.Sag
 		var status, failed, medium string
 		err := r.Scan(&sg.ID, &sg.IdempotencyKey, &status, &sg.TenantID, &failed, &sg.FailureDetail, &sg.CreatedAt, &sg.UpdatedAt,
 			&sg.OnBehalfOf, &sg.Payment.ReservationID, &sg.Payment.PaymentID, &medium, &sg.Payment.AmountCents,
-			&sg.Payment.BusinessDate, &sg.Payment.Concept, &sg.CashMovementID, &sg.Version)
+			&sg.Payment.BusinessDate, &sg.Payment.Concept, &sg.CashMovementID, &sg.Version, &sg.Payment.Reason)
 		sg.Status, sg.FailedStep, sg.Payment.Medium = saga.Status(status), saga.Step(failed), saga.Medium(medium)
 		sg.Payment.ApprovedBy = sg.OnBehalfOf
 		return sg, err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -58,6 +59,48 @@ func TestI_Create_stores_the_payment_and_Get_reads_it_back(t *testing.T) {
 	read, err := s.Get(ctx, want.ID)
 	if err != nil || read.Payment != want.Payment || read.OnBehalfOf != person || read.TenantID != tenant || len(read.Steps) != 0 {
 		t.Errorf("Get = %+v, %v", read, err)
+	}
+}
+
+// HU-COM-010 DP-11: the reason is kept with the saga so a resume can send it again; without one the column stays NULL and
+// the saga reads back an empty reason.
+func TestI_the_reason_is_stored_and_read_back_or_stays_empty(t *testing.T) {
+	s, pool := newStore(t)
+	with := fresh(1, "key-register-0001", t0)
+	with.Payment.Reason = "Amount verified in the bank"
+	mustCreate(t, s, with)
+	mustCreate(t, s, fresh(2, "key-register-0002", t0))
+
+	read, err := s.Get(ctx, with.ID)
+	if err != nil || read.Payment.Reason != "Amount verified in the bank" || read.Payment != with.Payment {
+		t.Errorf("Get = %+v, %v", read.Payment, err)
+	}
+	stale, err := s.ClaimStale(ctx, t0.Add(time.Hour), t0.Add(2*time.Hour))
+	if err != nil || len(stale) != 2 || stale[0].Payment.Reason != "Amount verified in the bank" || stale[1].Payment.Reason != "" {
+		t.Errorf("ClaimStale = %+v, %v", stale, err)
+	}
+	var nulls int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM workflow_register_payment.register_payment_saga WHERE reason IS NULL`).Scan(&nulls); err != nil || nulls != 1 {
+		t.Errorf("rows without reason = %d, %v", nulls, err)
+	}
+}
+
+// The database refuses a blank reason and one over 500 characters, whatever the code says.
+func TestI_the_database_bounds_the_reason(t *testing.T) {
+	_, pool := newStore(t)
+	insert := func(n int, reason string) error {
+		_, err := pool.Exec(ctx, `INSERT INTO workflow_register_payment.register_payment_saga (saga_id, idempotency_key, reason)
+			VALUES ($1::text::uuid, $2, $3)`, sagaID(n), fmt.Sprintf("key-reason-%04d", n), reason)
+		return err
+	}
+	for n, reason := range map[int]string{1: "", 2: "   ", 3: strings.Repeat("r", 501)} {
+		var pg *pgconn.PgError
+		if err := insert(n, reason); !errors.As(err, &pg) || pg.ConstraintName != "chk_register_payment_saga_reason" {
+			t.Errorf("reason of %d characters: %v", len(reason), err)
+		}
+	}
+	if err := insert(4, strings.Repeat("r", 500)); err != nil {
+		t.Errorf("500 characters: %v", err)
 	}
 }
 

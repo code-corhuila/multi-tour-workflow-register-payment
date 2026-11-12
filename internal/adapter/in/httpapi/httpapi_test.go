@@ -136,6 +136,48 @@ func TestA_an_administrator_starts_the_saga_with_the_tenant_and_the_person_of_th
 	}
 }
 
+// HU-COM-010 DP-11: the reason of an approval with a different amount is optional and travels trimmed; without it the
+// payment carries none.
+func TestA_the_optional_reason_reaches_the_command_trimmed(t *testing.T) {
+	cases := map[string]struct{ body, want string }{
+		"with reason":    {strings.Replace(goodBody, `"concept"`, `"reason":"  Amount verified in the bank  ","concept"`, 1), "Amount verified in the bank"},
+		"at the limit":   {strings.Replace(goodBody, `"concept"`, `"reason":"`+strings.Repeat("r", 500)+`","concept"`, 1), strings.Repeat("r", 500)},
+		"without reason": {goodBody, ""},
+	}
+	for name, c := range cases {
+		uc := &fakeUseCase{started: completed(), created: true}
+		rec := post(server(uc), token(t, signer, claims(nil)), goodKey, c.body)
+		if rec.Code != http.StatusCreated || uc.cmd.Payment.Reason != c.want {
+			t.Errorf("%s: status %d reason %q, want %q", name, rec.Code, uc.cmd.Payment.Reason, c.want)
+		}
+	}
+}
+
+// The reason is refused when it is blank, longer than 500 characters or not a string; the message never echoes it.
+func TestA_an_invalid_reason_is_refused_without_echoing_it(t *testing.T) {
+	h := server(&fakeUseCase{started: completed(), created: true})
+	bearer := token(t, signer, claims(nil))
+	with := func(raw string) string {
+		return strings.Replace(goodBody, `"concept"`, `"reason":`+raw+`,"concept"`, 1)
+	}
+	bodies := map[string]string{
+		"empty":    with(`""`),
+		"blank":    with(`"   "`),
+		"too long": with(`"` + strings.Repeat("r", 501) + `"`),
+		"a number": with(`12`),
+		"null":     with(`null`),
+	}
+	for name, body := range bodies {
+		rec := post(h, bearer, goodKey, body)
+		if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "VALIDATION_ERROR" || !strings.Contains(rec.Body.String(), `"reason"`) {
+			t.Errorf("%s: status %d body %s", name, rec.Code, rec.Body)
+		}
+		if strings.Contains(rec.Body.String(), "rrrrr") {
+			t.Errorf("%s: the answer echoes the reason", name)
+		}
+	}
+}
+
 // AC-WF2-05: the same key answers 200 with the saga of the first start.
 func TestA_a_repeated_key_answers_200(t *testing.T) {
 	uc := &fakeUseCase{started: completed(), created: false}

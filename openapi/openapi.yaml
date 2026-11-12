@@ -144,6 +144,14 @@ components:
           type: string
           minLength: 1
           maxLength: 200
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: >
+            Optional. Why the verified amount differs from the one reported by the customer. It is trimmed (blank is refused)
+            and sent to step 2, where the reservation requires it when the amount differs. It is kept with the saga so a
+            restart sends it again.
     Saga:
       type: object
       required: [id, status, completedSteps, createdAt, updatedAt]

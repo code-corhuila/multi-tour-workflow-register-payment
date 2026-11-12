@@ -98,14 +98,16 @@ func (f *fakeCash) ReverseIncome(_ context.Context, call out.Call, _, movementID
 }
 
 type fakeReservations struct {
-	journal *[]string
-	calls   []out.Call
-	err     error
+	journal  *[]string
+	calls    []out.Call
+	payments []saga.Payment
+	err      error
 }
 
-func (f *fakeReservations) RecordValidatedPayment(_ context.Context, call out.Call, _ string, _ saga.Payment) error {
+func (f *fakeReservations) RecordValidatedPayment(_ context.Context, call out.Call, _ string, p saga.Payment) error {
 	*f.journal = append(*f.journal, "payment")
 	f.calls = append(f.calls, call)
+	f.payments = append(f.payments, p)
 	return f.err
 }
 
@@ -158,6 +160,36 @@ func TestA_records_the_income_then_the_payment(t *testing.T) {
 	}
 	if s.CashMovementID != "mov-1" || !s.Done(saga.RecordCashIncome) || !s.Done(saga.RecordValidatedPayment) {
 		t.Errorf("state = %+v", s)
+	}
+}
+
+// HU-COM-010 DP-11: the reason of the approval reaches step 2 untouched and the saga completes as before.
+func TestA_the_reason_reaches_the_payment_step(t *testing.T) {
+	r := newRig()
+	cmd := command()
+	cmd.Payment.Reason = "Amount verified in the bank"
+
+	s, _, err := r.job.Start(context.Background(), cmd)
+
+	if err != nil || s.Status != saga.Completed || len(r.bookings.payments) != 1 || r.bookings.payments[0].Reason != "Amount verified in the bank" {
+		t.Fatalf("saga %+v err %v payments %+v", s, err, r.bookings.payments)
+	}
+}
+
+// The compensation does not change with a reason: a refusal of step 2 still reverses the income.
+func TestA_a_refused_payment_with_a_reason_still_reverses_the_income(t *testing.T) {
+	r := newRig()
+	r.bookings.err = rejection("REASON_REQUIRED")
+	cmd := command()
+	cmd.Payment.Reason = "Amount verified in the bank"
+
+	s, _, err := r.job.Start(context.Background(), cmd)
+
+	if err != nil || s.Status != saga.Compensated || s.FailedStep != saga.RecordValidatedPayment {
+		t.Fatalf("saga %+v err %v", s, err)
+	}
+	if got := strings.Join(*r.journal, ","); got != "income,payment,reverse:mov-1" {
+		t.Errorf("calls = %s", got)
 	}
 }
 
