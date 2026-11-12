@@ -169,6 +169,28 @@ func TestI_the_validated_payment_is_posted_to_the_payment(t *testing.T) {
 	}
 }
 
+// HU-COM-010 DP-11: the reason of the approval goes in the body of step 2 under the name the commercial route reads
+// (ValidatedPayment.reason); without one the body keeps its two fields.
+func TestI_the_validated_payment_carries_the_reason_only_when_there_is_one(t *testing.T) {
+	srv, stub := newStub(t, `{}`, http.StatusOK)
+	p := payment()
+	p.Reason = "Amount verified in the bank"
+
+	if err := participants.NewReservations(srv.URL, cfg).RecordValidatedPayment(ctx(), out.Call{Key: "k"}, tenant, p); err != nil {
+		t.Fatal(err)
+	}
+	if stub.sent["reason"] != "Amount verified in the bank" || stub.sent["approvedBy"] != person || stub.sent["verifiedAmountCents"] != float64(150000) || len(stub.sent) != 3 {
+		t.Errorf("sent %v", stub.sent)
+	}
+	p.Reason = ""
+	if err := participants.NewReservations(srv.URL, cfg).RecordValidatedPayment(ctx(), out.Call{Key: "k"}, tenant, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := stub.sent["reason"]; has || len(stub.sent) != 2 {
+		t.Errorf("sent %v", stub.sent)
+	}
+}
+
 // An id of the path that is not a plain id cannot change the route.
 func TestI_the_ids_of_the_path_are_escaped(t *testing.T) {
 	srv, stub := newStub(t, `{}`, http.StatusOK)
