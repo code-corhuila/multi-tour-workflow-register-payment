@@ -20,11 +20,15 @@ func NewReservations(baseURL string, cfg Config) *Reservations {
 
 // RecordValidatedPayment is idempotent by state: repeating it for a payment already validated answers 200.
 func (r *Reservations) RecordValidatedPayment(ctx context.Context, call out.Call, tenantID string, p saga.Payment) error {
+	body := map[string]any{"approvedBy": p.ApprovedBy, "verifiedAmountCents": p.AmountCents}
+	if p.Reason != "" {
+		body["reason"] = p.Reason // ValidatedPayment.reason of the commercial route; required there when the amount differs (DP-06)
+	}
 	_, err := r.c.post(ctx, request{
 		path: "/api/v1/commercial-reservation/internal/tenants/" + url.PathEscape(tenantID) + "/payment-proofs/" +
 			url.PathEscape(p.PaymentID) + "/validated-payment",
 		key:  call.Key,
-		body: map[string]any{"approvedBy": p.ApprovedBy, "verifiedAmountCents": p.AmountCents},
+		body: body,
 		ok:   []int{http.StatusOK},
 	})
 	return err

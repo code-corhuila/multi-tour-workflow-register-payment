@@ -50,3 +50,20 @@ databaseChangeLog:
             relativeToChangelogFile: true
             splitStatements: false
             stripComments: false
+  - changeSet:
+      id: register-payment-ddl-alter-004
+      author: FernandaRobayo
+      labels: "HU-COM-010,ddl,alter"
+      comment: "The optional reason of the approval, kept so a restart sends it again to step 2 (HU-COM-010 DP-11)."
+      changes:
+        - sqlFile:
+            path: 004_add_saga_reason.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/004_add_saga_reason.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
