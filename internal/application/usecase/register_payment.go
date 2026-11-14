@@ -22,6 +22,7 @@ type RegisterPayment struct {
 	cash         out.Cash
 	lookup       out.CashIncomeLookup
 	reservations out.Reservations
+	payments     out.ValidatedPaymentLookup
 	log          *slog.Logger
 	newID        func() string
 	now          func() time.Time
@@ -29,8 +30,9 @@ type RegisterPayment struct {
 }
 
 func NewRegisterPayment(store out.Store, cash out.Cash, lookup out.CashIncomeLookup, reservations out.Reservations,
+	payments out.ValidatedPaymentLookup,
 	log *slog.Logger, newID func() string, now func() time.Time, bound time.Duration) *RegisterPayment {
-	return &RegisterPayment{store, cash, lookup, reservations, log, newID, now, bound}
+	return &RegisterPayment{store, cash, lookup, reservations, payments, log, newID, now, bound}
 }
 
 var _ in.RegisterPayment = (*RegisterPayment)(nil)
@@ -85,8 +87,8 @@ func (r *RegisterPayment) Resume(ctx context.Context, before time.Time) error {
 //
 //	RECORD_CASH_INCOME        none: a definitive rejection ends FAILED, nothing was recorded; an unknown outcome asks the
 //	                          cash whether the income exists (settleUnknownIncome)
-//	RECORD_VALIDATED_PAYMENT  a definitive rejection reverses the income; an unknown outcome ends FAILED, because the
-//	                          payment may exist and a person has to decide
+//	RECORD_VALIDATED_PAYMENT  a definitive rejection reverses the income; an unclear outcome reads the payment first
+//	                          (abort): validated completes, not validated reverses, no answer ends FAILED for a person
 //
 // Crash window: if the process stops after a participant answered and before the save that follows, the step is not
 // recorded; the resume repeats it with the same key, which the participant answers as a replay.
@@ -147,13 +149,25 @@ func (r *RegisterPayment) settleUnknownIncome(ctx context.Context, s *saga.Saga,
 	return "", false, r.finish(ctx, s)
 }
 
-// abort ends the saga after step 2 did not succeed. Only a definitive rejection is compensated; a compensation that
-// fails also ends FAILED.
+// abort ends the saga after step 2 did not succeed. A definitive rejection is compensated; an unclear outcome is compensated
+// only when the read says the payment is not validated. A compensation that fails also ends FAILED.
 func (r *RegisterPayment) abort(ctx context.Context, s *saga.Saga, cause error) error {
 	detail := sanitize(cause)
 	if !definitive(cause) {
-		s.End(saga.Failed, saga.RecordValidatedPayment, detail)
-		return r.finish(ctx, s)
+		// Unclear outcome: the payment may be recorded, so the reservation is asked first (AC-WF2-12, option B). Validated:
+		// the saga completes. Not validated: the income is reversed below. No answer: FAILED for a person, never reversed.
+		validated, err := r.payments.FindValidatedPayment(ctx, s.TenantID, s.Payment.PaymentID)
+		switch {
+		case err != nil:
+			r.log.WarnContext(ctx, "payment outcome unclear and its read failed, left to a person",
+				append(r.fields(*s), "code", codeOf(cause), "lookupCode", codeOf(err))...)
+			s.End(saga.Failed, saga.RecordValidatedPayment, detail+"; read of the payment failed: "+codeOf(err))
+			return r.finish(ctx, s)
+		case validated:
+			s.Record(saga.RecordValidatedPayment)
+			s.End(saga.Completed, "", "")
+			return r.finish(ctx, s)
+		}
 	}
 	call := out.Call{Key: s.StepKey(saga.RecordCashIncome) + ":undo", OnBehalfOf: s.OnBehalfOf}
 	if err := r.cash.ReverseIncome(ctx, call, s.TenantID, s.CashMovementID, reversalReason); err != nil {

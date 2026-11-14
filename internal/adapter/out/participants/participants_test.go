@@ -232,3 +232,14 @@ func TestNoIncomeLookup_never_answers_not_found(t *testing.T) {
 		t.Errorf("FindIncome = %q %v %v", id, found, err)
 	}
 }
+
+// G-WF2-7: until the commercial api serves the read of a validated payment, the lookup gives no answer (never "not
+// validated"), so an unclear step 2 is never reversed on a guess.
+func TestNoValidatedPaymentLookup_never_answers_not_validated(t *testing.T) {
+	found, err := participants.NoValidatedPaymentLookup{}.FindValidatedPayment(context.Background(), tenant, "p-1")
+
+	var participant *saga.ParticipantError
+	if found || !errors.As(err, &participant) || participant.Definitive || participant.Code != "PAYMENT_LOOKUP_UNAVAILABLE" {
+		t.Errorf("FindValidatedPayment = %v %v", found, err)
+	}
+}
