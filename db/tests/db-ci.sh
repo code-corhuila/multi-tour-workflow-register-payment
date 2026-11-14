@@ -128,9 +128,16 @@ step() { # saga id, number, name, status, compensated_at (SQL or NULL)
   printf "INSERT INTO workflow_register_payment.register_payment_saga_step (saga_id, step_number, step_name, step_status, compensated_at) VALUES ('%s', %s, '%s', '%s', %s)" "$1" "$2" "$3" "${4:-COMPLETED}" "${5:-NULL}"
 }
 
-idempotency_key_is_unique_and_sized() {
+# DD-23: the key is unique per tenant (a row without tenant counts as one tenant), and the global unique is gone
+idempotency_key_is_unique_per_tenant_and_sized() {
+  T1=00000000-0000-4000-8000-0000000000e1; T2=00000000-0000-4000-8000-0000000000e2; S3=00000000-0000-4000-8000-0000000000a3
+  tenant_saga() { printf "INSERT INTO workflow_register_payment.register_payment_saga (saga_id, idempotency_key, tenant_id) VALUES ('%s', '%s', '%s')" "$1" "$2" "$3"; }
+  clean; psql_admin -c "$(tenant_saga $S1 $KEY1 $T1)" >/dev/null || return 1
+  psql_admin -c "$(tenant_saga $S2 $KEY1 $T2)" >/dev/null || { echo "the same key in another tenant was refused"; return 1; }
+  refused uq_register_payment_saga_tenant_idempotency_key "$(tenant_saga $S3 $KEY1 $T1)" || return 1
   clean; psql_admin -c "$(saga $S1 $KEY1)" >/dev/null || return 1
-  refused uq_register_payment_saga_idempotency_key "$(saga $S2 $KEY1)" || return 1
+  refused uq_register_payment_saga_tenant_idempotency_key "$(saga $S2 $KEY1)" || return 1
+  [ "$(psql_admin -c "SELECT count(*) FROM pg_constraint WHERE conname = 'uq_register_payment_saga_idempotency_key'")" = 0 ] || { echo "the global unique of the key is still there"; return 1; }
   refused chk_register_payment_saga_idempotency_key "$(saga $S2 short)" || return 1
   psql_admin -c "$(saga $S2 $KEY2)" >/dev/null
 }
@@ -200,7 +207,7 @@ check "I·db_ci_second_update_changes_nothing" second_update_changes_nothing
 check "I·changesets_apply_twice_without_error" changesets_apply_twice_without_error
 check "I·workflow_register_payment_app_writes_only_its_schema" writes_only_its_schema
 check "I·owns_its_control_table_and_roles" owns_its_control_table_and_roles
-check "I·idempotency_key_is_unique_and_sized" idempotency_key_is_unique_and_sized
+check "I·idempotency_key_is_unique_per_tenant_and_sized" idempotency_key_is_unique_per_tenant_and_sized
 check "I·status_is_one_of_the_four_states" status_is_one_of_the_four_states
 check "I·failed_step_goes_with_a_failed_status_and_a_known_name" failed_step_goes_with_a_failed_status_and_a_known_name
 check "I·failure_detail_is_bounded" failure_detail_is_bounded
