@@ -26,7 +26,7 @@ var clock = time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 // memoryStore keeps the sagas by id and counts versions like the real store.
 type memoryStore struct {
 	sagas map[string]saga.Saga
-	keys  map[string]string
+	keys  map[string]string // by tenant and key, as the real store (DD-23)
 }
 
 func newStore() *memoryStore {
@@ -34,10 +34,10 @@ func newStore() *memoryStore {
 }
 
 func (m *memoryStore) Create(_ context.Context, s saga.Saga) (saga.Saga, bool, error) {
-	if id, ok := m.keys[s.IdempotencyKey]; ok {
+	if id, ok := m.keys[s.TenantID+"|"+s.IdempotencyKey]; ok {
 		return m.sagas[id], false, nil
 	}
-	m.keys[s.IdempotencyKey], m.sagas[s.ID] = s.ID, s
+	m.keys[s.TenantID+"|"+s.IdempotencyKey], m.sagas[s.ID] = s.ID, s
 	return s, true, nil
 }
 
@@ -353,24 +353,33 @@ func TestA_a_second_saga_for_the_same_payment_records_no_second_income(t *testin
 	}
 }
 
-// D1 of the audit: a replay of a key is the same start only when the tenant and the body are the same.
-func TestA_a_replay_of_a_key_with_another_tenant_or_another_body_is_refused(t *testing.T) {
-	otherBody := command()
-	otherBody.Payment.AmountCents = 99
-	otherTenant := command()
-	otherTenant.TenantID = "33333333-3333-4333-8333-333333333333"
-	for name, again := range map[string]in.StartCommand{"another body": otherBody, "another tenant": otherTenant} {
-		t.Run(name, func(t *testing.T) {
-			r := newRig()
-			first, _, _ := r.job.Start(context.Background(), command())
-			before := len(*r.journal)
+// D1 of the audit: a replay of a key in the same tenant is the same start only when the body is the same.
+func TestA_a_replay_of_a_key_with_another_body_is_refused(t *testing.T) {
+	r := newRig()
+	first, _, _ := r.job.Start(context.Background(), command())
+	before := len(*r.journal)
+	again := command()
+	again.Payment.AmountCents = 99
 
-			got, created, err := r.job.Start(context.Background(), again)
+	got, created, err := r.job.Start(context.Background(), again)
 
-			if !errors.Is(err, saga.ErrKeyReuse) || created || got.ID == first.ID || len(*r.journal) != before {
-				t.Errorf("created %v err %v saga %q calls %v", created, err, got.ID, *r.journal)
-			}
-		})
+	if !errors.Is(err, saga.ErrKeyReuse) || created || got.ID == first.ID || len(*r.journal) != before {
+		t.Errorf("created %v err %v saga %q calls %v", created, err, got.ID, *r.journal)
+	}
+}
+
+// AC-WF2-05 amended (DD-23): the key is unique per tenant. Another tenant with the same key starts a saga of its own and
+// learns nothing of the first one.
+func TestA_another_tenant_with_the_same_key_starts_its_own_saga(t *testing.T) {
+	r := newRig()
+	first, _, _ := r.job.Start(context.Background(), command())
+	again := command()
+	again.TenantID = "33333333-3333-4333-8333-333333333333"
+
+	got, created, err := r.job.Start(context.Background(), again)
+
+	if err != nil || !created || got.ID == first.ID || got.TenantID != again.TenantID {
+		t.Errorf("created %v err %v saga %+v", created, err, got)
 	}
 }
 
