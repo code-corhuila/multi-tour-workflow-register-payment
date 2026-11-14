@@ -93,7 +93,8 @@ func (r *RegisterPayment) Resume(ctx context.Context, before time.Time) error {
 
 // run executes the steps not yet recorded, in order, saving the state after each one. Compensation:
 //
-//	RECORD_CASH_INCOME        none: a failure ends FAILED, nothing was recorded
+//	RECORD_CASH_INCOME        none: a definitive rejection ends FAILED, nothing was recorded; an unknown outcome leaves the
+//	                          saga RUNNING for the resume, which repeats the step with the same key
 //	RECORD_VALIDATED_PAYMENT  a definitive rejection reverses the income; an unknown outcome ends FAILED, because the
 //	                          payment may exist and a person has to decide
 //
@@ -104,6 +105,12 @@ func (r *RegisterPayment) run(ctx context.Context, s *saga.Saga) error {
 
 	if !s.Done(saga.RecordCashIncome) {
 		movementID, err := r.cash.RecordIncome(ctx, call(saga.RecordCashIncome), s.TenantID, s.Payment)
+		if err != nil && !definitive(err) {
+			// Unknown outcome: the cash may have recorded the income. The saga stays RUNNING and the resume repeats the step
+			// with the same key, which the cash answers as a replay with the movement id (nothing is lost or duplicated).
+			r.log.Warn("income outcome unknown, left to the resume", "sagaId", s.ID, "code", codeOf(err))
+			return nil
+		}
 		if err != nil {
 			s.End(saga.Failed, saga.RecordCashIncome, sanitize(err))
 			return r.finish(ctx, s)
