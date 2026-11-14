@@ -81,7 +81,7 @@ func TestErrors_are_distinct(t *testing.T) {
 	}
 }
 
-func TestHoldsPayment_only_while_the_income_may_exist(t *testing.T) {
+func TestHoldsPayment_unless_the_income_was_never_recorded(t *testing.T) {
 	cases := map[string]struct {
 		status saga.Status
 		failed saga.Step
@@ -89,7 +89,7 @@ func TestHoldsPayment_only_while_the_income_may_exist(t *testing.T) {
 	}{
 		"running":              {saga.Running, "", true},
 		"completed":            {saga.Completed, "", true},
-		"compensated":          {saga.Compensated, saga.RecordValidatedPayment, false},
+		"compensated":          {saga.Compensated, saga.RecordValidatedPayment, true},
 		"failed before income": {saga.Failed, saga.RecordCashIncome, false},
 		"failed after income":  {saga.Failed, saga.RecordValidatedPayment, true},
 	}
