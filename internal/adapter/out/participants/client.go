@@ -63,23 +63,38 @@ func sleepFor(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// request is one participant route; every one of them takes an Idempotency-Key, so a retry is the same intention.
+// request is one participant route. Every write takes an Idempotency-Key, so a retry is the same intention; a read (GET)
+// has neither key nor body.
 type request struct {
-	path string
-	key  string
-	body any
-	ok   []int
+	method string
+	path   string
+	key    string
+	body   any
+	ok     []int
 }
 
 var errorCode = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,39}$`)
 
-// post sends the request and returns the body of an accepted answer. Retries happen only for a network failure, 429 and
+func (c *client) post(ctx context.Context, r request) ([]byte, error) {
+	r.method = http.MethodPost
+	return c.send(ctx, r)
+}
+
+func (c *client) get(ctx context.Context, r request) ([]byte, error) {
+	r.method, r.key, r.body = http.MethodGet, "", nil
+	return c.send(ctx, r)
+}
+
+// send sends the request and returns the body of an accepted answer. Retries happen only for a network failure, 429 and
 // 5xx, with full jitter; what is left after the last attempt is an unknown outcome, because the participant may have
 // done the work. A 4xx is a clear rejection.
-func (c *client) post(ctx context.Context, r request) ([]byte, error) {
-	payload, err := json.Marshal(r.body)
-	if err != nil {
-		return nil, fmt.Errorf("encode the request: %w", err)
+func (c *client) send(ctx context.Context, r request) ([]byte, error) {
+	var payload []byte
+	if r.method != http.MethodGet {
+		var err error
+		if payload, err = json.Marshal(r.body); err != nil {
+			return nil, fmt.Errorf("encode the request: %w", err)
+		}
 	}
 	corr := correlation.From(ctx)
 	if !correlation.Valid(corr) {
@@ -119,14 +134,22 @@ func transient(status int) bool {
 func (c *client) once(ctx context.Context, r request, payload []byte, corr string) (int, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+r.path, bytes.NewReader(payload))
+	var reqBody io.Reader
+	if payload != nil {
+		reqBody = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, r.method, c.baseURL+r.path, reqBody)
 	if err != nil {
 		return 0, nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Idempotency-Key", r.key)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if r.key != "" {
+		req.Header.Set("Idempotency-Key", r.key)
+	}
 	req.Header.Set("X-Correlation-Id", corr)
 	resp, err := c.http.Do(req)
 	if err != nil {
