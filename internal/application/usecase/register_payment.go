@@ -56,7 +56,7 @@ func (r *RegisterPayment) Start(ctx context.Context, cmd in.StartCommand) (saga.
 	}
 	if !created {
 		if !s.SameStart(cmd.TenantID, cmd.Payment) {
-			// the key belongs to another tenant or to another body: nothing of that saga is handed over
+			// the key of this tenant belongs to another body: nothing of that saga is handed over (the store scopes keys by tenant)
 			return saga.Saga{}, false, saga.ErrKeyReuse
 		}
 		return s, false, nil

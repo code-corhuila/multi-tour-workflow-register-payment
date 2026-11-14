@@ -34,7 +34,7 @@ type Reservations interface {
 	RecordValidatedPayment(ctx context.Context, call Call, tenantID string, p saga.Payment) error
 }
 
-// Store persists the saga. Create inserts a RUNNING saga or, when the idempotency key exists, returns that one
+// Store persists the saga. Create inserts a RUNNING saga or, when the idempotency key exists in the tenant, returns that one
 // with created=false. It answers saga.ErrPaymentTaken when another saga, with another key, holds the payment.
 type Store interface {
 	Create(ctx context.Context, s saga.Saga) (stored saga.Saga, created bool, err error)
