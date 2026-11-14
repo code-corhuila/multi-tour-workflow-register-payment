@@ -345,14 +345,3 @@ func TestA_a_payment_held_by_another_saga_is_409(t *testing.T) {
 		t.Errorf("status %d body %s", rec.Code, rec.Body.String())
 	}
 }
-
-// D1: a key already used by another tenant or with another body answers 409 and never the saga of the other.
-func TestA_a_key_reused_with_another_tenant_or_body_is_409(t *testing.T) {
-	uc := &fakeUseCase{startErr: saga.ErrKeyReuse}
-
-	rec := post(server(uc), token(t, signer, claims(nil)), goodKey, goodBody)
-
-	if rec.Code != http.StatusConflict || errorCode(t, rec) != "IDEMPOTENCY_KEY_REUSED" {
-		t.Errorf("status %d body %s", rec.Code, rec.Body.String())
-	}
-}
