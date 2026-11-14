@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"log/slog"
 	"regexp"
 )
 
@@ -32,4 +33,26 @@ func NewID() string {
 	}
 	b[6], b[8] = b[6]&0x0f|0x40, b[8]&0x3f|0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
+// LogHandler wraps a slog handler so that every record logged with a context (slog.InfoContext and the like) carries the
+// correlationId of that context, when it has one. The core logs with its context and stays free of this package.
+type LogHandler struct{ slog.Handler }
+
+// NewLogHandler wraps next.
+func NewLogHandler(next slog.Handler) *LogHandler { return &LogHandler{next} }
+
+func (h *LogHandler) Handle(ctx context.Context, r slog.Record) error {
+	if id := From(ctx); id != "" {
+		r.AddAttrs(slog.String("correlationId", id))
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func (h *LogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &LogHandler{h.Handler.WithAttrs(attrs)}
+}
+
+func (h *LogHandler) WithGroup(name string) slog.Handler {
+	return &LogHandler{h.Handler.WithGroup(name)}
 }
