@@ -15,7 +15,8 @@ paths:
         Step 1 records the income in the cash, step 2 records the validated payment in the reservation. If step 2 is
         refused, the income is reversed with a compensating movement and the saga ends COMPENSATED; an unknown outcome of
         step 2 ends FAILED for a person to decide. Repeating the same Idempotency-Key returns the same saga with 200 and
-        runs no step.
+        runs no step. A payment is registered by one saga: a second
+        saga over the same payment answers 409, and so does a key used by another tenant or with another body.
       operationId: startRegisterPayment
       tags: [Sagas]
       x-hu: HU-WFL-002
@@ -56,6 +57,14 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
+        "409":
+          description: >
+            `PAYMENT_ALREADY_REGISTERED`: another saga, with another Idempotency-Key, already holds this payment; or
+            `IDEMPOTENCY_KEY_REUSED`: the key was used by another tenant or with another body. Nothing runs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           $ref: "#/components/responses/Error"
   /api/v1/sagas/register-payment/{id}:
@@ -182,7 +191,7 @@ components:
       properties:
         error:
           type: string
-          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, INTERNAL_ERROR]
+          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, PAYMENT_ALREADY_REGISTERED, IDEMPOTENCY_KEY_REUSED, INTERNAL_ERROR]
         message:
           type: string
         details:

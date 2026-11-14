@@ -23,7 +23,7 @@ import (
 const retryBaseDelay = 200 * time.Millisecond
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	log := slog.New(correlation.NewLogHandler(slog.NewJSONHandler(os.Stderr, nil)))
 	if err := run(log); err != nil {
 		log.Error("workflow stopped", "error", err.Error())
 		os.Exit(1)
