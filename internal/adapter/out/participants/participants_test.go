@@ -91,7 +91,7 @@ func TestI_the_income_is_posted_to_the_internal_route(t *testing.T) {
 		t.Errorf("headers = %v", stub.header)
 	}
 	want := map[string]any{"businessDate": "2026-11-10", "paymentMedium": "TRANSFER", "amountCents": float64(150000),
-		"reservationId": "r-1", "concept": "Abono", "onBehalfOf": person}
+		"reservationId": "r-1", "paymentId": "p-1", "concept": "Abono", "onBehalfOf": person}
 	for k, v := range want {
 		if stub.sent[k] != v {
 			t.Errorf("body %s = %v, want %v", k, stub.sent[k], v)

@@ -33,18 +33,41 @@ const (
 		coalesce(business_date::text, ''), coalesce(concept, ''), coalesce(cash_movement_id::text, ''), version, coalesce(reason, '')`
 )
 
+// holdsPayment is saga.Saga.HoldsPayment in SQL: running, completed, compensated, or failed after the income may exist.
+const holdsPayment = `(saga_status IN ('RUNNING', 'COMPLETED', 'COMPENSATED') OR (saga_status = 'FAILED' AND failed_step <> 'RECORD_CASH_INCOME'))`
+
 var uuidShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // Create inserts the saga as RUNNING. When the idempotency key exists, the insert does nothing and the existing saga is
 // returned with created=false; the engine makes two concurrent callers with one key take turns, so only one inserts.
 func (s *Store) Create(ctx context.Context, sg saga.Saga) (saga.Saga, bool, error) {
-	tag, err := s.pool.Exec(ctx, `INSERT INTO `+sagaTable+` (saga_id, idempotency_key, saga_status, tenant_id, created_at, updated_at,
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return saga.Saga{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	// Starts over one payment take turns, so two keys racing for the same payment cannot both pass the check below.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`, sg.TenantID+":"+sg.Payment.PaymentID); err != nil {
+		return saga.Saga{}, false, err
+	}
+	var taken bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+sagaTable+` WHERE tenant_id = $1::text::uuid AND payment_id = $2::text::uuid
+			AND idempotency_key <> $3 AND `+holdsPayment+`)`, sg.TenantID, sg.Payment.PaymentID, sg.IdempotencyKey).Scan(&taken); err != nil {
+		return saga.Saga{}, false, err
+	}
+	if taken {
+		return saga.Saga{}, false, saga.ErrPaymentTaken
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO `+sagaTable+` (saga_id, idempotency_key, saga_status, tenant_id, created_at, updated_at,
 			on_behalf_of, reservation_id, payment_id, payment_medium, amount_cents, business_date, concept, reason)
 		VALUES ($1::text::uuid, $2, 'RUNNING', $3::text::uuid, $4, $5, $6, $7::text::uuid, $8::text::uuid, $9, $10, $11::text::date, $12, nullif($13::text, ''))
 		ON CONFLICT ON CONSTRAINT uq_register_payment_saga_idempotency_key DO NOTHING`,
 		sg.ID, sg.IdempotencyKey, sg.TenantID, sg.CreatedAt, sg.UpdatedAt, sg.OnBehalfOf, sg.Payment.ReservationID,
 		sg.Payment.PaymentID, string(sg.Payment.Medium), sg.Payment.AmountCents, sg.Payment.BusinessDate, sg.Payment.Concept, sg.Payment.Reason)
 	if err != nil {
+		return saga.Saga{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return saga.Saga{}, false, err
 	}
 	if tag.RowsAffected() == 1 {
@@ -56,6 +79,19 @@ func (s *Store) Create(ctx context.Context, sg saga.Saga) (saga.Saga, bool, erro
 		return saga.Saga{}, false, errors.Join(err, errors.New("the saga of the idempotency key vanished"))
 	}
 	return existing[0], false, nil
+}
+
+// ForPayment returns the saga of the tenant that holds the payment: the SQL form of saga.Saga.HoldsPayment.
+func (s *Store) ForPayment(ctx context.Context, tenantID, paymentID string) (saga.Saga, bool, error) {
+	if !uuidShape.MatchString(tenantID) || !uuidShape.MatchString(paymentID) {
+		return saga.Saga{}, false, nil
+	}
+	found, err := s.load(ctx, `WHERE tenant_id = $1::text::uuid AND payment_id = $2::text::uuid AND `+holdsPayment+`
+		ORDER BY created_at LIMIT 1`, tenantID, paymentID)
+	if err != nil || len(found) == 0 {
+		return saga.Saga{}, false, err
+	}
+	return found[0], true, nil
 }
 
 // Save writes the status, the movement, the failure and the steps in one transaction. Only a RUNNING saga is written, and

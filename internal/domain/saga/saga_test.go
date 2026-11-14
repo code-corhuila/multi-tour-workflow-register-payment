@@ -80,3 +80,22 @@ func TestErrors_are_distinct(t *testing.T) {
 		t.Error("the errors of the store must differ")
 	}
 }
+
+func TestHoldsPayment_unless_the_income_was_never_recorded(t *testing.T) {
+	cases := map[string]struct {
+		status saga.Status
+		failed saga.Step
+		want   bool
+	}{
+		"running":              {saga.Running, "", true},
+		"completed":            {saga.Completed, "", true},
+		"compensated":          {saga.Compensated, saga.RecordValidatedPayment, true},
+		"failed before income": {saga.Failed, saga.RecordCashIncome, false},
+		"failed after income":  {saga.Failed, saga.RecordValidatedPayment, true},
+	}
+	for name, c := range cases {
+		if got := (saga.Saga{Status: c.status, FailedStep: c.failed}).HoldsPayment(); got != c.want {
+			t.Errorf("%s: HoldsPayment = %v, want %v", name, got, c.want)
+		}
+	}
+}
