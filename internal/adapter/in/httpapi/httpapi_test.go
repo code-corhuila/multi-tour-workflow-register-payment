@@ -334,3 +334,25 @@ func TestA_the_correlation_id_is_reused_or_made_and_health_needs_no_token(t *tes
 		t.Errorf("status %d id %q", rec.Code, rec.Header().Get("X-Correlation-Id"))
 	}
 }
+
+// D2: a start over a payment that another saga holds answers 409 and says so in the envelope.
+func TestA_a_payment_held_by_another_saga_is_409(t *testing.T) {
+	uc := &fakeUseCase{startErr: saga.ErrPaymentTaken}
+
+	rec := post(server(uc), token(t, signer, claims(nil)), goodKey, goodBody)
+
+	if rec.Code != http.StatusConflict || errorCode(t, rec) != "PAYMENT_ALREADY_REGISTERED" {
+		t.Errorf("status %d body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// D1: a key already used by another tenant or with another body answers 409 and never the saga of the other.
+func TestA_a_key_reused_with_another_tenant_or_body_is_409(t *testing.T) {
+	uc := &fakeUseCase{startErr: saga.ErrKeyReuse}
+
+	rec := post(server(uc), token(t, signer, claims(nil)), goodKey, goodBody)
+
+	if rec.Code != http.StatusConflict || errorCode(t, rec) != "IDEMPOTENCY_KEY_REUSED" {
+		t.Errorf("status %d body %s", rec.Code, rec.Body.String())
+	}
+}

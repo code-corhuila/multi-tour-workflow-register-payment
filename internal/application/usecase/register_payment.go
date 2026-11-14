@@ -40,11 +40,25 @@ func (r *RegisterPayment) Start(ctx context.Context, cmd in.StartCommand) (saga.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.bound)
 	defer cancel()
 	now := r.now()
+	// A payment is recorded once: another saga that holds it (another key) is refused before the cash is touched. The saga
+	// of this same key is a replay and falls through to Create.
+	if holder, found, err := r.store.ForPayment(ctx, cmd.TenantID, cmd.Payment.PaymentID); err != nil {
+		return saga.Saga{}, false, err
+	} else if found && holder.IdempotencyKey != cmd.IdempotencyKey {
+		return saga.Saga{}, false, saga.ErrPaymentTaken
+	}
 	fresh := saga.Saga{ID: r.newID(), IdempotencyKey: cmd.IdempotencyKey, Status: saga.Running, TenantID: cmd.TenantID,
 		OnBehalfOf: cmd.OnBehalfOf, Payment: cmd.Payment, CreatedAt: now, UpdatedAt: now}
 	s, created, err := r.store.Create(ctx, fresh)
-	if err != nil || !created {
+	if err != nil {
 		return s, false, err
+	}
+	if !created {
+		if !s.SameStart(cmd.TenantID, cmd.Payment) {
+			// the key belongs to another tenant or to another body: nothing of that saga is handed over
+			return saga.Saga{}, false, saga.ErrKeyReuse
+		}
+		return s, false, nil
 	}
 	return s, true, r.run(ctx, &s)
 }
@@ -67,7 +81,7 @@ func (r *RegisterPayment) Resume(ctx context.Context, before time.Time) error {
 	for i := range stale {
 		err := r.run(ctx, &stale[i])
 		if errors.Is(err, saga.ErrConflict) || errors.Is(err, saga.ErrEnded) {
-			r.log.Info("saga moved or ended by another actor, left to it", "sagaId", stale[i].ID)
+			r.log.InfoContext(ctx, "saga moved or ended by another actor, left to it", r.fields(stale[i])...)
 			continue
 		}
 		if err != nil {
@@ -121,7 +135,7 @@ func (r *RegisterPayment) abort(ctx context.Context, s *saga.Saga, cause error) 
 	call := out.Call{Key: s.StepKey(saga.RecordCashIncome) + ":undo", OnBehalfOf: s.OnBehalfOf}
 	if err := r.cash.ReverseIncome(ctx, call, s.TenantID, s.CashMovementID, reversalReason); err != nil {
 		code := codeOf(err)
-		r.log.Warn("compensation failed", "sagaId", s.ID, "step", saga.RecordCashIncome, "code", code)
+		r.log.WarnContext(ctx, "compensation failed", append(r.fields(*s), "step", saga.RecordCashIncome, "code", code)...)
 		s.End(saga.Failed, saga.RecordValidatedPayment, detail+"; compensation of "+string(saga.RecordCashIncome)+" failed: "+code)
 		return r.finish(ctx, s)
 	}
@@ -139,8 +153,14 @@ func (r *RegisterPayment) finish(ctx context.Context, s *saga.Saga) error {
 	if err := r.save(ctx, s); err != nil {
 		return err
 	}
-	r.log.Info("saga ended", "sagaId", s.ID, "status", s.Status, "failedStep", s.FailedStep)
+	r.log.InfoContext(ctx, "saga ended", append(r.fields(*s), "status", s.Status, "failedStep", s.FailedStep)...)
 	return nil
+}
+
+// fields are the attributes every log line of a saga carries: tenant and saga. The correlation id is added by the log handler
+// from the context (correlation.LogHandler), so the core stays free of the adapter (AC-WF2-08).
+func (r *RegisterPayment) fields(s saga.Saga) []any {
+	return []any{"tenantId", s.TenantID, "sagaId", s.ID}
 }
 
 func definitive(err error) bool {

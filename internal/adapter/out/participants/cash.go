@@ -25,7 +25,7 @@ func (c *Cash) RecordIncome(ctx context.Context, call out.Call, tenantID string,
 		path: cashPrefix + url.PathEscape(tenantID) + "/cash-movements",
 		key:  call.Key,
 		body: map[string]any{"businessDate": p.BusinessDate, "paymentMedium": string(p.Medium), "amountCents": p.AmountCents,
-			"reservationId": p.ReservationID, "concept": p.Concept, "onBehalfOf": call.OnBehalfOf},
+			"reservationId": p.ReservationID, "paymentId": p.PaymentID, "concept": p.Concept, "onBehalfOf": call.OnBehalfOf},
 		ok: []int{http.StatusCreated, http.StatusOK},
 	})
 	if err != nil {

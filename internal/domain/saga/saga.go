@@ -4,6 +4,7 @@ package saga
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -41,6 +42,14 @@ var ErrConflict = errors.New("saga was changed by another actor")
 
 // ErrEnded is returned by a store when a saga that already ended is saved again: an ended saga never changes.
 var ErrEnded = errors.New("saga already ended")
+
+// ErrPaymentTaken is returned when another saga already holds the payment of a start (same tenant and payment id, with
+// a different idempotency key): a payment is recorded in the cash once, whatever the key of the start.
+var ErrPaymentTaken = errors.New("another saga already holds this payment")
+
+// ErrKeyReuse is returned when an idempotency key that exists is used again by another tenant or with another body: the
+// replay answer is the saga of the same start only, never the saga of someone else or of another payment.
+var ErrKeyReuse = errors.New("the idempotency key was used for another start")
 
 // ParticipantError is the only error detail a participant may hand to the saga: a code and a message
 // already free of connection strings and tokens. Any other error is reduced to a generic one.
@@ -84,6 +93,28 @@ type Saga struct {
 	FailureDetail  string // sanitized code and message only
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+}
+
+// HoldsPayment is true while the saga keeps its payment from a second saga: it runs, it completed, it was compensated (the
+// cash keeps one income per payment, reversed or not) or it failed after the income may exist. Only a saga that failed at
+// the income step frees the payment for a new start.
+func (s Saga) HoldsPayment() bool {
+	switch s.Status {
+	case Running, Completed, Compensated:
+		return true
+	case Failed:
+		return s.FailedStep != RecordCashIncome
+	}
+	return false
+}
+
+// SameStart is true when a start of this tenant with this payment is the one the saga was created for. The approver is
+// not compared: it is the person of the token, not part of the body.
+func (s Saga) SameStart(tenantID string, p Payment) bool {
+	q := s.Payment
+	return strings.EqualFold(s.TenantID, tenantID) && strings.EqualFold(q.ReservationID, p.ReservationID) &&
+		strings.EqualFold(q.PaymentID, p.PaymentID) && q.Medium == p.Medium && q.AmountCents == p.AmountCents &&
+		q.BusinessDate == p.BusinessDate && q.Concept == p.Concept && q.Reason == p.Reason
 }
 
 // StepKey is the Idempotency-Key a step sends: <saga>:<step>.

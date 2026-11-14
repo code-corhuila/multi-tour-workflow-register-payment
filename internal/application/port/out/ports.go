@@ -28,13 +28,15 @@ type Reservations interface {
 }
 
 // Store persists the saga. Create inserts a RUNNING saga or, when the idempotency key exists, returns that one
-// with created=false.
+// with created=false. It answers saga.ErrPaymentTaken when another saga, with another key, holds the payment.
 type Store interface {
 	Create(ctx context.Context, s saga.Saga) (stored saga.Saga, created bool, err error)
 	// Save writes the saga if it is still the stored copy (same Version) and raises s.Version; otherwise it answers
 	// saga.ErrConflict (moved by another actor), saga.ErrEnded or saga.ErrNotFound.
 	Save(ctx context.Context, s *saga.Saga) error
 	Get(ctx context.Context, id string) (saga.Saga, error)
+	// ForPayment returns the saga of the tenant that holds the payment (saga.Saga.HoldsPayment), if there is one.
+	ForPayment(ctx context.Context, tenantID, paymentID string) (holder saga.Saga, found bool, err error)
 	// ClaimStale takes the RUNNING sagas not updated since before: it stamps them with now and raises their Version in
 	// one step, so no other caller takes the same saga, and returns them as taken.
 	ClaimStale(ctx context.Context, before, now time.Time) ([]saga.Saga, error)

@@ -124,6 +124,14 @@ func (h *handler) collection(w http.ResponseWriter, r *http.Request) {
 
 	started, created, err := h.uc.Start(r.Context(), in.StartCommand{IdempotencyKey: key, TenantID: claims.TenantID,
 		OnBehalfOf: claims.Subject, Payment: payment})
+	if errors.Is(err, saga.ErrPaymentTaken) {
+		writeError(w, r, http.StatusConflict, "PAYMENT_ALREADY_REGISTERED", "another saga already holds this payment")
+		return
+	}
+	if errors.Is(err, saga.ErrKeyReuse) {
+		writeError(w, r, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "the Idempotency-Key was used for another request")
+		return
+	}
 	if err != nil {
 		h.fail(w, r, "start the saga", err)
 		return
