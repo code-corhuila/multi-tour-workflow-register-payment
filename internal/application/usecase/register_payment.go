@@ -94,8 +94,8 @@ func (r *RegisterPayment) Resume(ctx context.Context, before time.Time) error {
 
 // run executes the steps not yet recorded, in order, saving the state after each one. Compensation:
 //
-//	RECORD_CASH_INCOME        none: a definitive rejection ends FAILED, nothing was recorded; an unknown outcome leaves the
-//	                          saga RUNNING for the resume, which repeats the step with the same key
+//	RECORD_CASH_INCOME        none: a definitive rejection ends FAILED, nothing was recorded; an unknown outcome asks the
+//	                          cash whether the income exists (settleUnknownIncome)
 //	RECORD_VALIDATED_PAYMENT  a definitive rejection reverses the income; an unknown outcome ends FAILED, because the
 //	                          payment may exist and a person has to decide
 //
@@ -107,10 +107,12 @@ func (r *RegisterPayment) run(ctx context.Context, s *saga.Saga) error {
 	if !s.Done(saga.RecordCashIncome) {
 		movementID, err := r.cash.RecordIncome(ctx, call(saga.RecordCashIncome), s.TenantID, s.Payment)
 		if err != nil && !definitive(err) {
-			// Unknown outcome: the cash may have recorded the income. The saga stays RUNNING and the resume repeats the step
-			// with the same key, which the cash answers as a replay with the movement id (nothing is lost or duplicated).
-			r.log.Warn("income outcome unknown, left to the resume", "sagaId", s.ID, "code", codeOf(err))
-			return nil
+			// Unknown outcome: the cash may have recorded the income, so it is asked (AC-WF2-11, option B).
+			var found bool
+			movementID, found, err = r.settleUnknownIncome(ctx, s, err)
+			if !found {
+				return err
+			}
 		}
 		if err != nil {
 			s.End(saga.Failed, saga.RecordCashIncome, sanitize(err))
@@ -130,6 +132,30 @@ func (r *RegisterPayment) run(ctx context.Context, s *saga.Saga) error {
 	}
 	s.End(saga.Completed, "", "")
 	return r.finish(ctx, s)
+}
+
+// settleUnknownIncome asks the cash whether the income of an unknown step 1 exists. Found: the movement id is returned and
+// step 1 counts as done. Not found: nothing was recorded, so the saga ends FAILED at the income step with nothing to undo
+// and the payment free. The read gives no answer either: the saga does not guess (norm section 5.8); it ends FAILED with
+// saga.IncomeOutcomeUnknown, which keeps the payment held, and a person decides.
+func (r *RegisterPayment) settleUnknownIncome(ctx context.Context, s *saga.Saga, cause error) (string, bool, error) {
+	movementID, found, err := r.lookup.FindIncome(ctx, s.TenantID, s.Payment.PaymentID)
+	if err == nil && found && movementID == "" {
+		err = errors.New("the read found an income without its id") // nothing to compensate with later: not an answer
+	}
+	switch {
+	case err != nil:
+		r.log.WarnContext(ctx, "income outcome unknown and its read failed, left to a person",
+			append(r.fields(*s), "code", codeOf(cause), "lookupCode", codeOf(err))...)
+		s.End(saga.Failed, saga.RecordCashIncome, saga.IncomeOutcomeUnknown+": the income may exist; step "+codeOf(cause)+
+			", read "+codeOf(err))
+		return "", false, r.finish(ctx, s)
+	case found:
+		return movementID, true, nil
+	}
+	s.End(saga.Failed, saga.RecordCashIncome, "INCOME_NOT_RECORDED: the outcome was unknown ("+codeOf(cause)+
+		") and the cash has no income of the payment")
+	return "", false, r.finish(ctx, s)
 }
 
 // abort ends the saga after step 2 did not succeed. Only a definitive rejection is compensated; a compensation that

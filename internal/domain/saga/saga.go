@@ -95,15 +95,19 @@ type Saga struct {
 	UpdatedAt      time.Time
 }
 
+// IncomeOutcomeUnknown opens the failure detail of a saga that failed at the income step without knowing whether the income
+// exists: the step had an unknown outcome and the read of the income gave no answer either (AC-WF2-11). A person decides.
+const IncomeOutcomeUnknown = "INCOME_OUTCOME_UNKNOWN"
+
 // HoldsPayment is true while the saga keeps its payment from a second saga: it runs, it completed, it was compensated (the
 // cash keeps one income per payment, reversed or not) or it failed after the income may exist. Only a saga that failed at
-// the income step frees the payment for a new start.
+// the income step, with the income refused or known not to exist, frees the payment for a new start.
 func (s Saga) HoldsPayment() bool {
 	switch s.Status {
 	case Running, Completed, Compensated:
 		return true
 	case Failed:
-		return s.FailedStep != RecordCashIncome
+		return s.FailedStep != RecordCashIncome || strings.HasPrefix(s.FailureDetail, IncomeOutcomeUnknown+":")
 	}
 	return false
 }
