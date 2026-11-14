@@ -13,7 +13,6 @@ import (
 	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/application/port/in"
 	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/application/port/out"
 	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/application/usecase"
-	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/correlation"
 	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/domain/saga"
 )
 
@@ -368,15 +367,13 @@ func TestA_a_replay_with_the_same_tenant_and_body_still_answers_the_saga(t *test
 	}
 }
 
-// AC-WF2-08: the line that ends a saga carries the tenant, the saga and the correlation id.
-func TestA_the_end_of_a_saga_is_logged_with_tenant_saga_and_correlation_id(t *testing.T) {
+// AC-WF2-08: the line that ends a saga carries the tenant and the saga (the correlation id is added by correlation.LogHandler).
+func TestA_the_end_of_a_saga_is_logged_with_tenant_and_saga(t *testing.T) {
 	r := newRig()
-	ctx := correlation.With(context.Background(), "corr-0123456789")
-
-	s, _, _ := r.job.Start(ctx, command())
+	s, _, _ := r.job.Start(context.Background(), command())
 
 	line := r.log.String()
-	for _, want := range []string{`"tenantId":"` + tenant + `"`, `"sagaId":"` + s.ID + `"`, `"correlationId":"corr-0123456789"`} {
+	for _, want := range []string{`"tenantId":"` + tenant + `"`, `"sagaId":"` + s.ID + `"`} {
 		if !strings.Contains(line, want) {
 			t.Errorf("log lacks %s: %s", want, line)
 		}
