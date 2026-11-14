@@ -22,6 +22,13 @@ type Cash interface {
 	ReverseIncome(ctx context.Context, call Call, tenantID, movementID, reason string) error
 }
 
+// CashIncomeLookup reads whether the cash holds the income of a payment, after step 1 ended with an unknown outcome
+// (AC-WF2-11, option B). found=false means the cash answered that there is none; an error means the read itself gave
+// no answer, and the saga does not guess.
+type CashIncomeLookup interface {
+	FindIncome(ctx context.Context, tenantID, paymentID string) (movementID string, found bool, err error)
+}
+
 // Reservations is the participant of step 2 (commercial-reservation, internal route). It has no compensation.
 type Reservations interface {
 	RecordValidatedPayment(ctx context.Context, call Call, tenantID string, p saga.Payment) error

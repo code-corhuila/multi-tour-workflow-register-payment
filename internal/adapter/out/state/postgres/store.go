@@ -33,8 +33,10 @@ const (
 		coalesce(business_date::text, ''), coalesce(concept, ''), coalesce(cash_movement_id::text, ''), version, coalesce(reason, '')`
 )
 
-// holdsPayment is saga.Saga.HoldsPayment in SQL: running, completed, compensated, or failed after the income may exist.
-const holdsPayment = `(saga_status IN ('RUNNING', 'COMPLETED', 'COMPENSATED') OR (saga_status = 'FAILED' AND failed_step <> 'RECORD_CASH_INCOME'))`
+// holdsPayment is saga.Saga.HoldsPayment in SQL: running, completed, compensated, or failed after the income may exist
+// (a later step, or the income step whose outcome stayed unknown).
+const holdsPayment = `(saga_status IN ('RUNNING', 'COMPLETED', 'COMPENSATED') OR (saga_status = 'FAILED' AND
+	(failed_step <> 'RECORD_CASH_INCOME' OR starts_with(coalesce(failure_detail, ''), '` + saga.IncomeOutcomeUnknown + `:'))))`
 
 var uuidShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
