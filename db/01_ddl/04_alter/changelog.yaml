@@ -67,3 +67,20 @@ databaseChangeLog:
             relativeToChangelogFile: true
             splitStatements: false
             stripComments: false
+  - changeSet:
+      id: register-payment-ddl-alter-005
+      author: FernandaRobayo
+      labels: "HU-WFL-002,ddl,alter"
+      comment: "The idempotency key is unique per tenant, not across tenants (AC-WF2-05 amended, DD-23)."
+      changes:
+        - sqlFile:
+            path: 005_idempotency_key_per_tenant.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/005_idempotency_key_per_tenant.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
