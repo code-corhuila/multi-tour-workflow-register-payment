@@ -13,8 +13,9 @@ paths:
       summary: Register a payment in the cash and in the reservation
       description: >
         Step 1 records the income in the cash, step 2 records the validated payment in the reservation. If step 2 is
-        refused, the income is reversed with a compensating movement and the saga ends COMPENSATED; an unknown outcome of
-        step 2 ends FAILED for a person to decide. Repeating the same Idempotency-Key returns the same saga with 200 and
+        refused, the income is reversed with a compensating movement and the saga ends COMPENSATED; an unclear outcome of
+        step 2 reads the payment first (validated completes, not validated is reversed, no answer ends FAILED for a person
+        to decide). Repeating the same Idempotency-Key returns the same saga with 200 and
         runs no step. A payment is registered by one saga: a second
         saga over the same payment answers 409, and so does a key the same tenant used with another body. The key is
         unique per tenant: another tenant may use the same key for its own saga.
