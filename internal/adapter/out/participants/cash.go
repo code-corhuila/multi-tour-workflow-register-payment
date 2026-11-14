@@ -45,6 +45,11 @@ func (NoIncomeLookup) FindIncome(context.Context, string, string) (string, bool,
 	return "", false, unknown("INCOME_LOOKUP_UNAVAILABLE", "the cash has no read of the income of a payment yet")
 }
 
+// FindIncome reads the income of a payment (getInternalCashIncomeOfPayment).
+func (c *Cash) FindIncome(ctx context.Context, tenantID, paymentID string) (string, bool, error) {
+	return NoIncomeLookup{}.FindIncome(ctx, tenantID, paymentID)
+}
+
 // ReverseIncome records the compensating movement; the income is never updated or deleted.
 func (c *Cash) ReverseIncome(ctx context.Context, call out.Call, tenantID, movementID, reason string) error {
 	_, err := c.c.post(ctx, request{

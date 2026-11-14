@@ -243,3 +243,74 @@ func TestNoValidatedPaymentLookup_never_answers_not_validated(t *testing.T) {
 		t.Errorf("FindValidatedPayment = %v %v", found, err)
 	}
 }
+
+// reader answers one scripted status and body to the read of the income, and remembers the request.
+func reader(t *testing.T, status int, body string) (*httptest.Server, *stub) {
+	t.Helper()
+	f := &stub{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.calls.Add(1)
+		f.method, f.path, f.header = r.Method, r.URL.Path, r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, f
+}
+
+// AC-WF2-11, G-WF2-6 (docs #1035, getInternalCashIncomeOfPayment): the income of a payment is read with GET on the internal
+// route of the tenant, with the service credential and the correlation id, and without an Idempotency-Key (a read).
+func TestI_the_income_of_a_payment_is_read_from_the_internal_route(t *testing.T) {
+	srv, stub := reader(t, http.StatusOK, `{"cashMovementId":"mov-7","movementType":"INCOME"}`)
+
+	id, found, err := participants.NewCash(srv.URL, cfg).FindIncome(ctx(), tenant, "p-1")
+
+	if err != nil || !found || id != "mov-7" {
+		t.Fatalf("FindIncome = %q %v %v", id, found, err)
+	}
+	if stub.method != http.MethodGet || stub.path != "/api/v1/cash-reporting/internal/tenants/"+tenant+"/payments/p-1/cash-income" {
+		t.Errorf("asked %s %s", stub.method, stub.path)
+	}
+	if stub.header.Get("Authorization") != "Bearer "+token || stub.header.Get("X-Correlation-Id") != "run-1234" ||
+		stub.header.Get("Idempotency-Key") != "" {
+		t.Errorf("headers = %v", stub.header)
+	}
+}
+
+// AC-WF2-11: a 404 NOT_FOUND of the cash, with its envelope, says that the tenant has no income for the payment.
+func TestI_a_404_not_found_of_the_cash_means_no_income(t *testing.T) {
+	srv, _ := reader(t, http.StatusNotFound, `{"error":"NOT_FOUND","message":"No income for this payment","traceId":"t"}`)
+
+	id, found, err := participants.NewCash(srv.URL, cfg).FindIncome(ctx(), tenant, "p-1")
+
+	if err != nil || found || id != "" {
+		t.Errorf("FindIncome = %q %v %v", id, found, err)
+	}
+}
+
+// AC-WF2-11 and norm section 5.8: anything that is not a clear answer of the cash is no answer, never "not found": a 404
+// without the envelope (a wrong route), a 403, a 200 without the movement id, or a read that keeps failing.
+func TestI_a_read_without_a_clear_answer_is_no_answer(t *testing.T) {
+	cases := map[string]struct {
+		status int
+		body   string
+		calls  int32
+	}{
+		"404 without envelope": {http.StatusNotFound, `not here`, 1},
+		"403":                  {http.StatusForbidden, `{"error":"FORBIDDEN","message":"no"}`, 1},
+		"200 without id":       {http.StatusOK, `{"movementType":"INCOME"}`, 1},
+		"503 every attempt":    {http.StatusServiceUnavailable, `{}`, 3},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv, stub := reader(t, c.status, c.body)
+
+			id, found, err := participants.NewCash(srv.URL, cfg).FindIncome(ctx(), tenant, "p-1")
+
+			if err == nil || found || id != "" || stub.calls.Load() != c.calls {
+				t.Errorf("FindIncome = %q %v %v after %d calls", id, found, err, stub.calls.Load())
+			}
+		})
+	}
+}
