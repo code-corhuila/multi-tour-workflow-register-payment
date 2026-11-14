@@ -2,6 +2,7 @@ package participants
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 
@@ -34,20 +35,35 @@ func (c *Cash) RecordIncome(ctx context.Context, call out.Call, tenantID string,
 	return decode(body, "cashMovementId")
 }
 
-// NoIncomeLookup stands in for the read of the income of a payment, which the cash contract does not have yet (G-WF2-6 of
-// HU-WFL-002, PROPOSED). It always answers "no answer", so an unknown outcome of step 1 ends FAILED for a person instead of
-// a guess. It is replaced by the real adapter when the route is in the cash contract.
-type NoIncomeLookup struct{}
+var _ out.CashIncomeLookup = (*Cash)(nil)
 
-var _ out.CashIncomeLookup = NoIncomeLookup{}
-
-func (NoIncomeLookup) FindIncome(context.Context, string, string) (string, bool, error) {
-	return "", false, unknown("INCOME_LOOKUP_UNAVAILABLE", "the cash has no read of the income of a payment yet")
+// FindIncome reads the income of a payment (getInternalCashIncomeOfPayment, docs #1035; G-WF2-6 of HU-WFL-002). Only a 404
+// with the NOT_FOUND code of the cash means "no income"; any other refusal, a 200 without the movement id or a read that
+// keeps failing is no answer, so the saga never frees a payment whose income may exist.
+func (c *Cash) FindIncome(ctx context.Context, tenantID, paymentID string) (string, bool, error) {
+	body, err := c.c.get(ctx, request{
+		path: cashPrefix + url.PathEscape(tenantID) + "/payments/" + url.PathEscape(paymentID) + "/cash-income",
+		ok:   []int{http.StatusOK},
+	})
+	var refused *saga.ParticipantError
+	if errors.As(err, &refused) && refused.Definitive && refused.Code == "NOT_FOUND" {
+		return "", false, nil
+	}
+	if err == nil {
+		var id string
+		if id, err = decode(body, "cashMovementId"); err == nil {
+			return id, true, nil
+		}
+	}
+	return "", false, unknown("INCOME_LOOKUP_FAILED", "the read of the income gave no answer: "+codeOf(err))
 }
 
-// FindIncome reads the income of a payment (getInternalCashIncomeOfPayment).
-func (c *Cash) FindIncome(ctx context.Context, tenantID, paymentID string) (string, bool, error) {
-	return NoIncomeLookup{}.FindIncome(ctx, tenantID, paymentID)
+func codeOf(err error) string {
+	var participant *saga.ParticipantError
+	if errors.As(err, &participant) {
+		return participant.Code
+	}
+	return "UNKNOWN"
 }
 
 // ReverseIncome records the compensating movement; the income is never updated or deleted.
