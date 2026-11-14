@@ -126,6 +126,21 @@ func (f *fakeLookup) FindIncome(_ context.Context, tenantID, paymentID string) (
 	return f.movementID, f.found, f.err
 }
 
+// fakePaymentLookup answers the read of the payment after an unclear step 2 and writes its calls in the journal.
+type fakePaymentLookup struct {
+	journal *[]string
+	found   bool
+	err     error
+}
+
+func (f *fakePaymentLookup) FindValidatedPayment(_ context.Context, tenantID, paymentID string) (bool, error) {
+	*f.journal = append(*f.journal, "read-payment:"+paymentID)
+	if tenantID != tenant {
+		return false, fmt.Errorf("unexpected read tenant %s", tenantID)
+	}
+	return f.found, f.err
+}
+
 type fakeReservations struct {
 	journal  *[]string
 	calls    []out.Call
@@ -144,6 +159,7 @@ type rig struct {
 	store    *memoryStore
 	cash     *fakeCash
 	lookup   *fakeLookup
+	payments *fakePaymentLookup
 	bookings *fakeReservations
 	journal  *[]string
 	log      *bytes.Buffer
@@ -154,9 +170,9 @@ func newRig() *rig {
 	journal := &[]string{}
 	r := &rig{store: newStore(), journal: journal, log: &bytes.Buffer{}}
 	r.cash, r.bookings = &fakeCash{journal: journal}, &fakeReservations{journal: journal}
-	r.lookup = &fakeLookup{journal: journal}
+	r.lookup, r.payments = &fakeLookup{journal: journal}, &fakePaymentLookup{journal: journal}
 	n := 0
-	r.job = usecase.NewRegisterPayment(r.store, r.cash, r.lookup, r.bookings, slog.New(slog.NewJSONHandler(r.log, nil)),
+	r.job = usecase.NewRegisterPayment(r.store, r.cash, r.lookup, r.bookings, r.payments, slog.New(slog.NewJSONHandler(r.log, nil)),
 		func() string { n++; return fmt.Sprintf("saga-%d", n) }, func() time.Time { return clock }, time.Minute)
 	return r
 }
@@ -260,15 +276,52 @@ func TestA_a_failed_payment_reverses_the_income(t *testing.T) {
 	}
 }
 
-// An unknown outcome of step 2 may have recorded the payment: the income is not reversed and a person decides.
-func TestA_an_unknown_payment_outcome_is_not_reversed(t *testing.T) {
+// AC-WF2-12 (option B for step 2, replaces G-WF2-4): an unclear step 2 reads the payment; it is validated, so the saga
+// completes and nothing is reversed.
+func TestA_an_unclear_payment_that_is_validated_completes(t *testing.T) {
+	r := newRig()
+	r.bookings.err = errors.New("timeout")
+	r.payments.found = true
+
+	s, _, err := r.job.Start(context.Background(), command())
+
+	if err != nil || s.Status != saga.Completed || !s.Done(saga.RecordValidatedPayment) || s.FailedStep != "" {
+		t.Fatalf("saga %+v err %v", s, err)
+	}
+	if got := strings.Join(*r.journal, ","); got != "income,payment,read-payment:p-1" {
+		t.Errorf("calls = %s", got)
+	}
+}
+
+// AC-WF2-12: the payment is not validated, so the income is reversed and the saga ends COMPENSATED, as for a refusal.
+func TestA_an_unclear_payment_that_is_not_validated_reverses_the_income(t *testing.T) {
 	r := newRig()
 	r.bookings.err = errors.New("timeout")
 
-	s, _, _ := r.job.Start(context.Background(), command())
+	s, _, err := r.job.Start(context.Background(), command())
 
-	if s.Status != saga.Failed || strings.Contains(strings.Join(*r.journal, ","), "reverse") {
-		t.Errorf("saga %+v calls %v", s, *r.journal)
+	if err != nil || s.Status != saga.Compensated || s.FailedStep != saga.RecordValidatedPayment || !s.Steps[0].Compensated {
+		t.Fatalf("saga %+v err %v", s, err)
+	}
+	if got := strings.Join(*r.journal, ","); got != "income,payment,read-payment:p-1,reverse:mov-1" {
+		t.Errorf("calls = %s", got)
+	}
+}
+
+// AC-WF2-12 and norm section 5.8: the read fails too, so the payment may be recorded: the income is not reversed, the saga
+// ends FAILED at step 2 and a person decides.
+func TestA_an_unclear_payment_whose_read_fails_ends_failed_without_reversal(t *testing.T) {
+	r := newRig()
+	r.bookings.err = errors.New("timeout")
+	r.payments.err = &saga.ParticipantError{Code: "PARTICIPANT_UNAVAILABLE", Message: "no answer from the participant"}
+
+	s, _, err := r.job.Start(context.Background(), command())
+
+	if err != nil || s.Status != saga.Failed || s.FailedStep != saga.RecordValidatedPayment {
+		t.Fatalf("saga %+v err %v", s, err)
+	}
+	if got := strings.Join(*r.journal, ","); got != "income,payment,read-payment:p-1" {
+		t.Errorf("calls = %s, want no reversal", got)
 	}
 }
 
