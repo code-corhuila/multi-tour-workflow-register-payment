@@ -13,6 +13,7 @@ import (
 	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/application/port/in"
 	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/application/port/out"
 	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/application/usecase"
+	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/correlation"
 	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/domain/saga"
 )
 
@@ -39,6 +40,15 @@ func (m *memoryStore) Create(_ context.Context, s saga.Saga) (saga.Saga, bool, e
 	}
 	m.keys[s.IdempotencyKey], m.sagas[s.ID] = s.ID, s
 	return s, true, nil
+}
+
+func (m *memoryStore) ForPayment(_ context.Context, tenantID, paymentID string) (saga.Saga, bool, error) {
+	for _, s := range m.sagas {
+		if s.TenantID == tenantID && s.Payment.PaymentID == paymentID && s.HoldsPayment() {
+			return s, true, nil
+		}
+	}
+	return saga.Saga{}, false, nil
 }
 
 func (m *memoryStore) Save(_ context.Context, s *saga.Saga) error {
@@ -307,5 +317,87 @@ func TestA_get_reads_the_saga_of_the_store(t *testing.T) {
 
 	if err != nil || got.ID != started.ID {
 		t.Errorf("got %+v err %v", got, err)
+	}
+}
+
+// D2 of the audit of 2026-11-13: a second saga with ANOTHER key over the same payment must not record the income again
+// (evidence 5b w3/033: the second saga b97cfb2f ended COMPLETED).
+func TestA_a_second_saga_for_the_same_payment_records_no_second_income(t *testing.T) {
+	r := newRig()
+	r.job.Start(context.Background(), command())
+	before := len(*r.journal)
+	again := command()
+	again.IdempotencyKey = "key-register-0002"
+
+	_, created, err := r.job.Start(context.Background(), again)
+
+	if !errors.Is(err, saga.ErrPaymentTaken) || created || len(*r.journal) != before {
+		t.Errorf("created %v err %v calls %v", created, err, *r.journal)
+	}
+}
+
+// D1 of the audit: a replay of a key is the same start only when the tenant and the body are the same.
+func TestA_a_replay_of_a_key_with_another_tenant_or_another_body_is_refused(t *testing.T) {
+	otherBody := command()
+	otherBody.Payment.AmountCents = 99
+	otherTenant := command()
+	otherTenant.TenantID = "33333333-3333-4333-8333-333333333333"
+	for name, again := range map[string]in.StartCommand{"another body": otherBody, "another tenant": otherTenant} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig()
+			first, _, _ := r.job.Start(context.Background(), command())
+			before := len(*r.journal)
+
+			got, created, err := r.job.Start(context.Background(), again)
+
+			if !errors.Is(err, saga.ErrKeyReuse) || created || got.ID == first.ID || len(*r.journal) != before {
+				t.Errorf("created %v err %v saga %q calls %v", created, err, got.ID, *r.journal)
+			}
+		})
+	}
+}
+
+func TestA_a_replay_with_the_same_tenant_and_body_still_answers_the_saga(t *testing.T) {
+	r := newRig()
+	first, _, _ := r.job.Start(context.Background(), command())
+
+	got, created, err := r.job.Start(context.Background(), command())
+
+	if err != nil || created || got.ID != first.ID {
+		t.Errorf("created %v err %v saga %q", created, err, got.ID)
+	}
+}
+
+// AC-WF2-08: the line that ends a saga carries the tenant, the saga and the correlation id.
+func TestA_the_end_of_a_saga_is_logged_with_tenant_saga_and_correlation_id(t *testing.T) {
+	r := newRig()
+	ctx := correlation.With(context.Background(), "corr-0123456789")
+
+	s, _, _ := r.job.Start(ctx, command())
+
+	line := r.log.String()
+	for _, want := range []string{`"tenantId":"` + tenant + `"`, `"sagaId":"` + s.ID + `"`, `"correlationId":"corr-0123456789"`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("log lacks %s: %s", want, line)
+		}
+	}
+}
+
+// D6: step 1 with an unknown outcome (the cash may have recorded it) ends FAILED at that step; the saga neither goes on to
+// step 2 nor reverses what it does not know, and the answer carries no internal text.
+func TestA_an_unknown_income_outcome_stops_without_step_2_or_reversal(t *testing.T) {
+	r := newRig()
+	r.cash.incomeErr = errors.New("context deadline exceeded: postgres://user:secret-password@db")
+
+	s, created, err := r.job.Start(context.Background(), command())
+
+	if err != nil || !created || s.Status != saga.Failed || s.FailedStep != saga.RecordCashIncome {
+		t.Fatalf("saga %+v created %v err %v", s, created, err)
+	}
+	if got := strings.Join(*r.journal, ","); got != "income" {
+		t.Errorf("calls = %s, want only the income", got)
+	}
+	if strings.Contains(s.FailureDetail, "secret-password") {
+		t.Errorf("detail leaks: %q", s.FailureDetail)
 	}
 }
