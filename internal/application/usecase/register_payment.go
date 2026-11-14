@@ -20,6 +20,7 @@ const (
 type RegisterPayment struct {
 	store        out.Store
 	cash         out.Cash
+	lookup       out.CashIncomeLookup
 	reservations out.Reservations
 	log          *slog.Logger
 	newID        func() string
@@ -27,9 +28,9 @@ type RegisterPayment struct {
 	bound        time.Duration // longest a started saga may run, independent of the caller
 }
 
-func NewRegisterPayment(store out.Store, cash out.Cash, reservations out.Reservations,
+func NewRegisterPayment(store out.Store, cash out.Cash, lookup out.CashIncomeLookup, reservations out.Reservations,
 	log *slog.Logger, newID func() string, now func() time.Time, bound time.Duration) *RegisterPayment {
-	return &RegisterPayment{store, cash, reservations, log, newID, now, bound}
+	return &RegisterPayment{store, cash, lookup, reservations, log, newID, now, bound}
 }
 
 var _ in.RegisterPayment = (*RegisterPayment)(nil)
