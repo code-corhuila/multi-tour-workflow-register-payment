@@ -1,9 +1,9 @@
 name: ci
 
-# gofmt, go vet and go test. Pull requests toward develop and qa only. No schedule.
+# gofmt, go vet and go test. Pull requests toward develop, qa and main only. No schedule.
 on:
   pull_request:
-    branches: [develop, qa]
+    branches: [develop, qa, main]
 
 concurrency:
   group: ci-${{ github.ref }}
