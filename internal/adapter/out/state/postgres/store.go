@@ -44,6 +44,17 @@ var uuidShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
 // the insert does nothing and the existing saga of that tenant is
 // returned with created=false; the engine makes two concurrent callers with one key take turns, so only one inserts.
 func (s *Store) Create(ctx context.Context, sg saga.Saga) (saga.Saga, bool, error) {
+	// A repeated key of the tenant gets its saga whatever the body, before any check of the payment (AC-WF2-05). A key
+	// inserted by a concurrent caller after this read is caught by ON CONFLICT below.
+	if uuidShape.MatchString(sg.TenantID) {
+		existing, err := s.load(ctx, `WHERE tenant_id = $1::text::uuid AND idempotency_key = $2`, sg.TenantID, sg.IdempotencyKey)
+		if err != nil {
+			return saga.Saga{}, false, err
+		}
+		if len(existing) > 0 {
+			return existing[0], false, nil
+		}
+	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return saga.Saga{}, false, err
