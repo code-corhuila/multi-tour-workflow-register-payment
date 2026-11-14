@@ -128,10 +128,6 @@ func (h *handler) collection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusConflict, "PAYMENT_ALREADY_REGISTERED", "another saga already holds this payment")
 		return
 	}
-	if errors.Is(err, saga.ErrKeyReuse) {
-		writeError(w, r, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "the Idempotency-Key was used for another request")
-		return
-	}
 	if err != nil {
 		h.fail(w, r, "start the saga", err)
 		return

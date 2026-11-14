@@ -47,10 +47,6 @@ var ErrEnded = errors.New("saga already ended")
 // a different idempotency key): a payment is recorded in the cash once, whatever the key of the start.
 var ErrPaymentTaken = errors.New("another saga already holds this payment")
 
-// ErrKeyReuse is returned when an idempotency key that exists in a tenant is used again there with another body: the
-// replay answer is the saga of the same start only, never the saga of someone else or of another payment.
-var ErrKeyReuse = errors.New("the idempotency key was used for another start")
-
 // ParticipantError is the only error detail a participant may hand to the saga: a code and a message
 // already free of connection strings and tokens. Any other error is reduced to a generic one.
 type ParticipantError struct {
@@ -110,15 +106,6 @@ func (s Saga) HoldsPayment() bool {
 		return s.FailedStep != RecordCashIncome || strings.HasPrefix(s.FailureDetail, IncomeOutcomeUnknown+":")
 	}
 	return false
-}
-
-// SameStart is true when a start of this tenant with this payment is the one the saga was created for. The approver is
-// not compared: it is the person of the token, not part of the body.
-func (s Saga) SameStart(tenantID string, p Payment) bool {
-	q := s.Payment
-	return strings.EqualFold(s.TenantID, tenantID) && strings.EqualFold(q.ReservationID, p.ReservationID) &&
-		strings.EqualFold(q.PaymentID, p.PaymentID) && q.Medium == p.Medium && q.AmountCents == p.AmountCents &&
-		q.BusinessDate == p.BusinessDate && q.Concept == p.Concept && q.Reason == p.Reason
 }
 
 // StepKey is the Idempotency-Key a step sends: <saga>:<step>.

@@ -41,25 +41,14 @@ func (r *RegisterPayment) Start(ctx context.Context, cmd in.StartCommand) (saga.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.bound)
 	defer cancel()
 	now := r.now()
-	// A payment is recorded once: another saga that holds it (another key) is refused before the cash is touched. The saga
-	// of this same key is a replay and falls through to Create.
-	if holder, found, err := r.store.ForPayment(ctx, cmd.TenantID, cmd.Payment.PaymentID); err != nil {
-		return saga.Saga{}, false, err
-	} else if found && holder.IdempotencyKey != cmd.IdempotencyKey {
-		return saga.Saga{}, false, saga.ErrPaymentTaken
-	}
+	// The store answers the key of the tenant first: a repeated key starts nothing and gets its saga, whatever the body
+	// (AC-WF2-05, Annex C). Only a new key reaches the payment check: a payment that another saga holds is refused before
+	// the cash is touched (saga.ErrPaymentTaken).
 	fresh := saga.Saga{ID: r.newID(), IdempotencyKey: cmd.IdempotencyKey, Status: saga.Running, TenantID: cmd.TenantID,
 		OnBehalfOf: cmd.OnBehalfOf, Payment: cmd.Payment, CreatedAt: now, UpdatedAt: now}
 	s, created, err := r.store.Create(ctx, fresh)
-	if err != nil {
+	if err != nil || !created {
 		return s, false, err
-	}
-	if !created {
-		if !s.SameStart(cmd.TenantID, cmd.Payment) {
-			// the key of this tenant belongs to another body: nothing of that saga is handed over (the store scopes keys by tenant)
-			return saga.Saga{}, false, saga.ErrKeyReuse
-		}
-		return s, false, nil
 	}
 	return s, true, r.run(ctx, &s)
 }
