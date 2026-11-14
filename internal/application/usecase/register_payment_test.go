@@ -380,22 +380,22 @@ func TestA_the_end_of_a_saga_is_logged_with_tenant_and_saga(t *testing.T) {
 	}
 }
 
-// D6: step 1 with an unknown outcome (the cash may have recorded it) ends FAILED at that step; the saga neither goes on to
-// step 2 nor reverses what it does not know, and the answer carries no internal text.
+// D6: step 1 with an unknown outcome (the cash may have recorded it) leaves the saga RUNNING for the resume; the saga neither
+// goes on to step 2 nor reverses what it does not know, and neither the state nor the log carries internal text.
 func TestA_an_unknown_income_outcome_stops_without_step_2_or_reversal(t *testing.T) {
 	r := newRig()
 	r.cash.incomeErr = errors.New("context deadline exceeded: postgres://user:secret-password@db")
 
 	s, created, err := r.job.Start(context.Background(), command())
 
-	if err != nil || !created || s.Status != saga.Failed || s.FailedStep != saga.RecordCashIncome {
+	if err != nil || !created || s.Status != saga.Running || s.FailedStep != "" {
 		t.Fatalf("saga %+v created %v err %v", s, created, err)
 	}
 	if got := strings.Join(*r.journal, ","); got != "income" {
 		t.Errorf("calls = %s, want only the income", got)
 	}
-	if strings.Contains(s.FailureDetail, "secret-password") {
-		t.Errorf("detail leaks: %q", s.FailureDetail)
+	if strings.Contains(s.FailureDetail, "secret-password") || strings.Contains(r.log.String(), "secret-password") {
+		t.Errorf("detail leaks: %q %s", s.FailureDetail, r.log.String())
 	}
 }
 
