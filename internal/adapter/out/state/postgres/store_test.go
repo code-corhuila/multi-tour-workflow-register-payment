@@ -230,3 +230,75 @@ func TestI_the_service_role_cannot_delete_a_saga(t *testing.T) {
 		t.Errorf("delete: %v", err)
 	}
 }
+
+// D2: a second key over the payment of a running, completed or compensated saga is refused (the cash keeps one income per
+// payment, reversed or not), a replay of the first key is not, and a payment whose income was refused can start again. Under concurrency only one key wins.
+func TestI_Create_refuses_a_second_key_over_a_held_payment(t *testing.T) {
+	s, _ := newStore(t)
+	mustCreate(t, s, fresh(1, "key-register-0001", t0))
+
+	_, created, err := s.Create(ctx, fresh(2, "key-register-0002", t0))
+	if !errors.Is(err, saga.ErrPaymentTaken) || created {
+		t.Errorf("second key: created %v err %v", created, err)
+	}
+	if again, created, err := s.Create(ctx, fresh(3, "key-register-0001", t0)); err != nil || created || again.ID != sagaID(1) {
+		t.Errorf("replay: created %v err %v saga %s", created, err, again.ID)
+	}
+	holder, found, err := s.ForPayment(ctx, tenant, fresh(1, "k", t0).Payment.PaymentID)
+	if err != nil || !found || holder.ID != sagaID(1) {
+		t.Errorf("ForPayment = %s %v %v", holder.ID, found, err)
+	}
+}
+
+func TestI_a_payment_is_freed_only_by_a_failure_before_the_income(t *testing.T) {
+	for name, end := range map[string]func(*saga.Saga){
+		"income refused": func(sg *saga.Saga) { sg.End(saga.Failed, saga.RecordCashIncome, "x") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, _ := newStore(t)
+			first := fresh(1, "key-register-0001", t0)
+			mustCreate(t, s, first)
+			end(&first)
+			if err := s.Save(ctx, &first); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, created, err := s.Create(ctx, fresh(2, "key-register-0002", t0)); err != nil || !created {
+				t.Errorf("created %v err %v", created, err)
+			}
+		})
+	}
+}
+
+func TestI_Create_under_concurrency_over_one_payment_inserts_once(t *testing.T) {
+	s, pool := newStore(t)
+	var wg sync.WaitGroup
+	createds := make([]bool, 16)
+	for i := range createds {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, createds[i], _ = s.Create(ctx, fresh(i+1, fmt.Sprintf("key-register-%04d", i), t0))
+		}()
+	}
+	wg.Wait()
+	var rows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM workflow_register_payment.register_payment_saga`).Scan(&rows); err != nil || rows != 1 {
+		t.Errorf("rows %d err %v", rows, err)
+	}
+}
+
+func TestI_a_compensated_payment_stays_held(t *testing.T) {
+	s, _ := newStore(t)
+	first := fresh(1, "key-register-0001", t0)
+	mustCreate(t, s, first)
+	first.Record(saga.RecordCashIncome)
+	first.End(saga.Compensated, saga.RecordValidatedPayment, "x")
+	if err := s.Save(ctx, &first); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, created, err := s.Create(ctx, fresh(2, "key-register-0002", t0)); !errors.Is(err, saga.ErrPaymentTaken) || created {
+		t.Errorf("created %v err %v", created, err)
+	}
+}
