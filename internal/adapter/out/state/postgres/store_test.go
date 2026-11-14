@@ -320,3 +320,27 @@ func TestI_an_unknown_income_outcome_keeps_the_payment_held(t *testing.T) {
 		t.Errorf("ForPayment = %s %v %v", holder.ID, found, err)
 	}
 }
+
+// AC-WF2-05 amended (DD-23): the key is unique per tenant, so the same key in two tenants makes two sagas, and the replay of
+// each tenant reads back its own.
+func TestI_the_same_key_in_two_tenants_creates_two_sagas(t *testing.T) {
+	s, _ := newStore(t)
+	mustCreate(t, s, fresh(1, "key-register-0001", t0))
+	other := fresh(2, "key-register-0001", t0)
+	other.TenantID = "00000000-0000-4000-8000-0000000000a2"
+
+	got, created, err := s.Create(ctx, other)
+	if err != nil || !created || got.ID != sagaID(2) {
+		t.Fatalf("second tenant: created %v err %v saga %s", created, err, got.ID)
+	}
+	for _, c := range []struct {
+		tenant string
+		want   string
+	}{{tenant, sagaID(1)}, {other.TenantID, sagaID(2)}} {
+		replay := fresh(9, "key-register-0001", t0)
+		replay.TenantID = c.tenant
+		if again, created, err := s.Create(ctx, replay); err != nil || created || again.ID != c.want {
+			t.Errorf("replay of %s: created %v err %v saga %s", c.tenant, created, err, again.ID)
+		}
+	}
+}
