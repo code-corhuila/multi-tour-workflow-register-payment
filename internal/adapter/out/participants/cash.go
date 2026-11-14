@@ -34,6 +34,17 @@ func (c *Cash) RecordIncome(ctx context.Context, call out.Call, tenantID string,
 	return decode(body, "cashMovementId")
 }
 
+// NoIncomeLookup stands in for the read of the income of a payment, which the cash contract does not have yet (G-WF2-6 of
+// HU-WFL-002, PROPOSED). It always answers "no answer", so an unknown outcome of step 1 ends FAILED for a person instead of
+// a guess. It is replaced by the real adapter when the route is in the cash contract.
+type NoIncomeLookup struct{}
+
+var _ out.CashIncomeLookup = NoIncomeLookup{}
+
+func (NoIncomeLookup) FindIncome(context.Context, string, string) (string, bool, error) {
+	return "", false, unknown("INCOME_LOOKUP_UNAVAILABLE", "the cash has no read of the income of a payment yet")
+}
+
 // ReverseIncome records the compensating movement; the income is never updated or deleted.
 func (c *Cash) ReverseIncome(ctx context.Context, call out.Call, tenantID, movementID, reason string) error {
 	_, err := c.c.post(ctx, request{

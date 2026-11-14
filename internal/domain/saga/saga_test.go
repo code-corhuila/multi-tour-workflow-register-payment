@@ -99,3 +99,13 @@ func TestHoldsPayment_unless_the_income_was_never_recorded(t *testing.T) {
 		}
 	}
 }
+
+// AC-WF2-11: a saga that failed at the income step because its outcome stayed unknown keeps the payment, because the income
+// may exist; one whose income was refused or not found frees it.
+func TestHoldsPayment_when_the_income_outcome_stayed_unknown(t *testing.T) {
+	unknown := saga.Saga{Status: saga.Failed, FailedStep: saga.RecordCashIncome, FailureDetail: "INCOME_OUTCOME_UNKNOWN: the read failed"}
+	refused := saga.Saga{Status: saga.Failed, FailedStep: saga.RecordCashIncome, FailureDetail: "NO_OPEN_CASH: refused"}
+	if !unknown.HoldsPayment() || refused.HoldsPayment() {
+		t.Errorf("unknown holds %v, refused holds %v", unknown.HoldsPayment(), refused.HoldsPayment())
+	}
+}
