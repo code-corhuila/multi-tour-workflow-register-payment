@@ -58,6 +58,8 @@ func TestC_EveryResponseOfTheContractIsProducedAndValid(t *testing.T) {
 		{"no key", startWith(admin, "", goodBody), okUC(true), http.StatusBadRequest},
 		{"unknown field", startWith(admin, goodKey, strings.Replace(goodBody, `"concept"`, `"extra":1,"concept"`, 1)), okUC(true), http.StatusBadRequest},
 		{"use case fails", startWith(admin, goodKey, goodBody), &fakeUseCase{startErr: errors.New("pq: password authentication failed for host=db-internal")}, http.StatusInternalServerError},
+		{"payment held by another saga", startWith(admin, goodKey, goodBody), &fakeUseCase{startErr: saga.ErrPaymentTaken}, http.StatusConflict},
+		{"key of another tenant or body", startWith(admin, goodKey, goodBody), &fakeUseCase{startErr: saga.ErrKeyReuse}, http.StatusConflict},
 		{"read", readWith(admin), okUC(true), http.StatusOK},
 		{"read without token", readWith(""), okUC(true), http.StatusUnauthorized},
 		{"read unknown", readWith(admin), &fakeUseCase{getErr: saga.ErrNotFound}, http.StatusNotFound},
