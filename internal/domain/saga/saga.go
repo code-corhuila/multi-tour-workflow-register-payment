@@ -47,7 +47,7 @@ var ErrEnded = errors.New("saga already ended")
 // a different idempotency key): a payment is recorded in the cash once, whatever the key of the start.
 var ErrPaymentTaken = errors.New("another saga already holds this payment")
 
-// ErrKeyReuse is returned when an idempotency key that exists is used again by another tenant or with another body: the
+// ErrKeyReuse is returned when an idempotency key that exists in a tenant is used again there with another body: the
 // replay answer is the saga of the same start only, never the saga of someone else or of another payment.
 var ErrKeyReuse = errors.New("the idempotency key was used for another start")
 
