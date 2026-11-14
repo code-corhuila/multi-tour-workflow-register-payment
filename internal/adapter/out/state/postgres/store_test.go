@@ -344,3 +344,25 @@ func TestI_the_same_key_in_two_tenants_creates_two_sagas(t *testing.T) {
 		}
 	}
 }
+
+// AC-WF2-05 (signature note 3): the key of the tenant is answered first, whatever the body: a repeated key with a payment
+// that another saga holds still reads back its own saga, and nothing is inserted.
+func TestI_a_repeated_key_answers_its_saga_even_over_a_held_payment(t *testing.T) {
+	s, pool := newStore(t)
+	mustCreate(t, s, fresh(1, "key-register-0001", t0))
+	second := fresh(2, "key-register-0002", t0)
+	second.Payment.PaymentID = "00000000-0000-4000-8000-0000000000d2"
+	mustCreate(t, s, second)
+	replay := fresh(3, "key-register-0001", t0)
+	replay.Payment.PaymentID, replay.Payment.AmountCents = second.Payment.PaymentID, 99
+
+	got, created, err := s.Create(ctx, replay)
+
+	if err != nil || created || got.ID != sagaID(1) {
+		t.Errorf("created %v err %v saga %s", created, err, got.ID)
+	}
+	var rows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM workflow_register_payment.register_payment_saga`).Scan(&rows); err != nil || rows != 2 {
+		t.Errorf("rows %d err %v", rows, err)
+	}
+}
