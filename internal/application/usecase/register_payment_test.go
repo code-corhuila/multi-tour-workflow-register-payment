@@ -37,6 +37,10 @@ func (m *memoryStore) Create(_ context.Context, s saga.Saga) (saga.Saga, bool, e
 	if id, ok := m.keys[s.TenantID+"|"+s.IdempotencyKey]; ok {
 		return m.sagas[id], false, nil
 	}
+	// as the real store: the key of the tenant is answered first, then a payment held by another saga is refused
+	if _, held, _ := m.ForPayment(context.Background(), s.TenantID, s.Payment.PaymentID); held {
+		return saga.Saga{}, false, saga.ErrPaymentTaken
+	}
 	m.keys[s.TenantID+"|"+s.IdempotencyKey], m.sagas[s.ID] = s.ID, s
 	return s, true, nil
 }
@@ -353,18 +357,27 @@ func TestA_a_second_saga_for_the_same_payment_records_no_second_income(t *testin
 	}
 }
 
-// D1 of the audit: a replay of a key in the same tenant is the same start only when the body is the same.
-func TestA_a_replay_of_a_key_with_another_body_is_refused(t *testing.T) {
+// AC-WF2-05 (signature note 3, Annex C): a repeated key of the same tenant starts nothing and answers the saga already
+// created, whatever the body: another amount, or another payment that a third saga holds.
+func TestA_a_repeated_key_answers_the_saga_whatever_the_body(t *testing.T) {
 	r := newRig()
 	first, _, _ := r.job.Start(context.Background(), command())
+	held := command()
+	held.IdempotencyKey, held.Payment.PaymentID = "key-register-0002", "p-2"
+	r.store.sagas["s-held"] = saga.Saga{ID: "s-held", IdempotencyKey: held.IdempotencyKey, Status: saga.Completed,
+		TenantID: tenant, Payment: held.Payment}
+	otherAmount := command()
+	otherAmount.Payment.AmountCents = 99
+	otherPayment := command()
+	otherPayment.Payment.PaymentID = "p-2"
 	before := len(*r.journal)
-	again := command()
-	again.Payment.AmountCents = 99
 
-	got, created, err := r.job.Start(context.Background(), again)
+	for name, again := range map[string]in.StartCommand{"another amount": otherAmount, "a payment held by another saga": otherPayment} {
+		got, created, err := r.job.Start(context.Background(), again)
 
-	if !errors.Is(err, saga.ErrKeyReuse) || created || got.ID == first.ID || len(*r.journal) != before {
-		t.Errorf("created %v err %v saga %q calls %v", created, err, got.ID, *r.journal)
+		if err != nil || created || got.ID != first.ID || len(*r.journal) != before {
+			t.Errorf("%s: created %v err %v saga %q calls %v", name, created, err, got.ID, *r.journal)
+		}
 	}
 }
 
