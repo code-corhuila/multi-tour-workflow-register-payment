@@ -22,6 +22,7 @@ type RegisterPayment struct {
 	cash         out.Cash
 	lookup       out.CashIncomeLookup
 	reservations out.Reservations
+	payments     out.ValidatedPaymentLookup
 	log          *slog.Logger
 	newID        func() string
 	now          func() time.Time
@@ -29,8 +30,9 @@ type RegisterPayment struct {
 }
 
 func NewRegisterPayment(store out.Store, cash out.Cash, lookup out.CashIncomeLookup, reservations out.Reservations,
+	payments out.ValidatedPaymentLookup,
 	log *slog.Logger, newID func() string, now func() time.Time, bound time.Duration) *RegisterPayment {
-	return &RegisterPayment{store, cash, lookup, reservations, log, newID, now, bound}
+	return &RegisterPayment{store, cash, lookup, reservations, payments, log, newID, now, bound}
 }
 
 var _ in.RegisterPayment = (*RegisterPayment)(nil)
