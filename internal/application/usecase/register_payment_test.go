@@ -398,3 +398,28 @@ func TestA_an_unknown_income_outcome_stops_without_step_2_or_reversal(t *testing
 		t.Errorf("detail leaks: %q", s.FailureDetail)
 	}
 }
+
+// D6 of the audit of 2026-11-13: an unknown outcome of step 1 (timeout after the cash may have recorded the income) must
+// not end the saga as "nothing to undo": the saga stays RUNNING and the resume repeats step 1 with the same key, which the
+// cash answers as a replay with the movement id.
+func TestA_an_unknown_income_outcome_is_resumed_with_the_same_key(t *testing.T) {
+	r := newRig()
+	r.cash.incomeErr = errors.New("timeout awaiting the cash")
+
+	s, _, err := r.job.Start(context.Background(), command())
+
+	if err != nil || s.Status != saga.Running {
+		t.Fatalf("after the unknown outcome: status %s err %v", s.Status, err)
+	}
+	r.cash.incomeErr = nil
+	if err := r.job.Resume(context.Background(), clock.Add(time.Minute)); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	got := r.store.sagas[s.ID]
+	if got.Status != saga.Completed || got.CashMovementID != "mov-1" {
+		t.Errorf("resumed saga = %+v", got)
+	}
+	if k := r.cash.calls; len(k) != 2 || k[0].Key != k[1].Key {
+		t.Errorf("the repeats of step 1 must carry one key: %v", k)
+	}
+}
