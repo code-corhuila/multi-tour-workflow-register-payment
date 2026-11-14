@@ -221,3 +221,14 @@ func TestI_a_redirect_is_not_followed(t *testing.T) {
 		t.Errorf("err %v hits %d", err, hits.Load())
 	}
 }
+
+// G-WF2-6: until the cash has a read of the income of a payment, the lookup gives no answer (an unknown, never "not found"),
+// so the saga ends FAILED for a person instead of freeing a payment whose income may exist.
+func TestNoIncomeLookup_never_answers_not_found(t *testing.T) {
+	id, found, err := participants.NoIncomeLookup{}.FindIncome(context.Background(), tenant, "p-1")
+
+	var participant *saga.ParticipantError
+	if id != "" || found || !errors.As(err, &participant) || participant.Definitive || participant.Code != "INCOME_LOOKUP_UNAVAILABLE" {
+		t.Errorf("FindIncome = %q %v %v", id, found, err)
+	}
+}

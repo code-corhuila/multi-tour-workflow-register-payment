@@ -51,7 +51,8 @@ func run(log *slog.Logger) error {
 	participantCfg := participants.Config{Token: cfg.serviceToken, Timeout: cfg.stepTimeout, Attempts: cfg.stepAttempts, BaseDelay: retryBaseDelay}
 	bound := sagaBound(cfg)
 	register := usecase.NewRegisterPayment(postgres.NewStore(pool),
-		participants.NewCash(cfg.cashURL, participantCfg), participants.NewReservations(cfg.commercialURL, participantCfg),
+		participants.NewCash(cfg.cashURL, participantCfg), participants.NoIncomeLookup{},
+		participants.NewReservations(cfg.commercialURL, participantCfg),
 		log, correlation.NewID, time.Now, bound)
 
 	srv := newServer(cfg, httpapi.New(register, httpapi.NewVerifier(key), log), bound)

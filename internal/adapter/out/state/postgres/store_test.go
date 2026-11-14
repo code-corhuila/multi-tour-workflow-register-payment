@@ -302,3 +302,21 @@ func TestI_a_compensated_payment_stays_held(t *testing.T) {
 		t.Errorf("created %v err %v", created, err)
 	}
 }
+
+// AC-WF2-11: a saga that failed at the income step with its outcome unknown keeps the payment in the SQL form too.
+func TestI_an_unknown_income_outcome_keeps_the_payment_held(t *testing.T) {
+	s, _ := newStore(t)
+	first := fresh(1, "key-register-0001", t0)
+	mustCreate(t, s, first)
+	first.End(saga.Failed, saga.RecordCashIncome, "INCOME_OUTCOME_UNKNOWN: the read failed")
+	if err := s.Save(ctx, &first); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, created, err := s.Create(ctx, fresh(2, "key-register-0002", t0)); !errors.Is(err, saga.ErrPaymentTaken) || created {
+		t.Errorf("created %v err %v", created, err)
+	}
+	if holder, found, err := s.ForPayment(ctx, tenant, first.Payment.PaymentID); err != nil || !found || holder.ID != first.ID {
+		t.Errorf("ForPayment = %s %v %v", holder.ID, found, err)
+	}
+}
