@@ -52,7 +52,7 @@ func run(log *slog.Logger) error {
 	bound := sagaBound(cfg)
 	register := usecase.NewRegisterPayment(postgres.NewStore(pool),
 		participants.NewCash(cfg.cashURL, participantCfg), participants.NoIncomeLookup{},
-		participants.NewReservations(cfg.commercialURL, participantCfg),
+		participants.NewReservations(cfg.commercialURL, participantCfg), participants.NoValidatedPaymentLookup{},
 		log, correlation.NewID, time.Now, bound)
 
 	srv := newServer(cfg, httpapi.New(register, httpapi.NewVerifier(key), log), bound)

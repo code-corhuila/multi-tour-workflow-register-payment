@@ -29,6 +29,13 @@ type CashIncomeLookup interface {
 	FindIncome(ctx context.Context, tenantID, paymentID string) (movementID string, found bool, err error)
 }
 
+// ValidatedPaymentLookup reads whether the reservation holds the payment as validated, after step 2 ended with an unclear
+// outcome (AC-WF2-12, option B). found=false means the reservation answered that it is not validated; an error means the
+// read itself gave no answer, and the saga does not guess.
+type ValidatedPaymentLookup interface {
+	FindValidatedPayment(ctx context.Context, tenantID, paymentID string) (found bool, err error)
+}
+
 // Reservations is the participant of step 2 (commercial-reservation, internal route). It has no compensation.
 type Reservations interface {
 	RecordValidatedPayment(ctx context.Context, call Call, tenantID string, p saga.Payment) error
