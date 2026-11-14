@@ -106,6 +106,22 @@ func (f *fakeCash) ReverseIncome(_ context.Context, call out.Call, _, movementID
 	return f.reverseErr
 }
 
+// fakeLookup answers the read of the income after an unknown step 1 and writes its calls in the journal.
+type fakeLookup struct {
+	journal    *[]string
+	movementID string
+	found      bool
+	err        error
+}
+
+func (f *fakeLookup) FindIncome(_ context.Context, tenantID, paymentID string) (string, bool, error) {
+	*f.journal = append(*f.journal, "lookup:"+paymentID)
+	if tenantID != tenant {
+		return "", false, fmt.Errorf("unexpected lookup tenant %s", tenantID)
+	}
+	return f.movementID, f.found, f.err
+}
+
 type fakeReservations struct {
 	journal  *[]string
 	calls    []out.Call
@@ -123,6 +139,7 @@ func (f *fakeReservations) RecordValidatedPayment(_ context.Context, call out.Ca
 type rig struct {
 	store    *memoryStore
 	cash     *fakeCash
+	lookup   *fakeLookup
 	bookings *fakeReservations
 	journal  *[]string
 	log      *bytes.Buffer
@@ -133,8 +150,9 @@ func newRig() *rig {
 	journal := &[]string{}
 	r := &rig{store: newStore(), journal: journal, log: &bytes.Buffer{}}
 	r.cash, r.bookings = &fakeCash{journal: journal}, &fakeReservations{journal: journal}
+	r.lookup = &fakeLookup{journal: journal}
 	n := 0
-	r.job = usecase.NewRegisterPayment(r.store, r.cash, r.bookings, slog.New(slog.NewJSONHandler(r.log, nil)),
+	r.job = usecase.NewRegisterPayment(r.store, r.cash, r.lookup, r.bookings, slog.New(slog.NewJSONHandler(r.log, nil)),
 		func() string { n++; return fmt.Sprintf("saga-%d", n) }, func() time.Time { return clock }, time.Minute)
 	return r
 }
@@ -380,46 +398,78 @@ func TestA_the_end_of_a_saga_is_logged_with_tenant_and_saga(t *testing.T) {
 	}
 }
 
-// D6: step 1 with an unknown outcome (the cash may have recorded it) leaves the saga RUNNING for the resume; it neither goes on to
-// step 2 nor reverses what it does not know, and the answer carries no internal text.
-func TestA_an_unknown_income_outcome_stops_without_step_2_or_reversal(t *testing.T) {
+// AC-WF2-11 (option B, replaces the resume of D6): an unknown outcome of step 1 asks the cash; the income exists, so step 1
+// counts as done with the movement of the read and the saga goes on to step 2.
+func TestA_an_unknown_income_that_exists_goes_on_to_step_2(t *testing.T) {
 	r := newRig()
-	r.cash.incomeErr = errors.New("context deadline exceeded: postgres://user:secret-password@db")
+	r.cash.incomeErr = errors.New("timeout awaiting the cash")
+	r.lookup.movementID, r.lookup.found = "mov-found", true
 
 	s, created, err := r.job.Start(context.Background(), command())
 
-	if err != nil || !created || s.Status != saga.Running {
+	if err != nil || !created || s.Status != saga.Completed || s.CashMovementID != "mov-found" || !s.Done(saga.RecordCashIncome) {
 		t.Fatalf("saga %+v created %v err %v", s, created, err)
 	}
-	if got := strings.Join(*r.journal, ","); got != "income" {
-		t.Errorf("calls = %s, want only the income", got)
-	}
-	if strings.Contains(s.FailureDetail, "secret-password") {
-		t.Errorf("detail leaks: %q", s.FailureDetail)
+	if got := strings.Join(*r.journal, ","); got != "income,lookup:p-1,payment" {
+		t.Errorf("calls = %s", got)
 	}
 }
 
-// D6 of the audit of 2026-11-13: an unknown outcome of step 1 (timeout after the cash may have recorded the income) must
-// not end the saga as "nothing to undo": the saga stays RUNNING and the resume repeats step 1 with the same key, which the
-// cash answers as a replay with the movement id.
-func TestA_an_unknown_income_outcome_is_resumed_with_the_same_key(t *testing.T) {
+// AC-WF2-11: the income does not exist, so nothing was recorded and nothing is undone: FAILED at step 1 as AC-WF2-02, and
+// the payment is free for a new start. No internal text reaches the state or the log.
+func TestA_an_unknown_income_that_does_not_exist_ends_failed_and_frees_the_payment(t *testing.T) {
 	r := newRig()
-	r.cash.incomeErr = errors.New("timeout awaiting the cash")
+	r.cash.incomeErr = errors.New("context deadline exceeded: postgres://user:secret-password@db")
 
 	s, _, err := r.job.Start(context.Background(), command())
 
-	if err != nil || s.Status != saga.Running {
-		t.Fatalf("after the unknown outcome: status %s err %v", s.Status, err)
+	if err != nil || s.Status != saga.Failed || s.FailedStep != saga.RecordCashIncome || s.HoldsPayment() {
+		t.Fatalf("saga %+v err %v", s, err)
 	}
-	r.cash.incomeErr = nil
-	if err := r.job.Resume(context.Background(), clock.Add(time.Minute)); err != nil {
-		t.Fatalf("resume: %v", err)
+	if got := strings.Join(*r.journal, ","); got != "income,lookup:p-1" {
+		t.Errorf("calls = %s, want the income and the read only", got)
 	}
-	got := r.store.sagas[s.ID]
-	if got.Status != saga.Completed || got.CashMovementID != "mov-1" {
-		t.Errorf("resumed saga = %+v", got)
+	if strings.Contains(s.FailureDetail, "secret-password") || strings.Contains(r.log.String(), "secret-password") {
+		t.Errorf("a secret leaked: %q", s.FailureDetail)
 	}
-	if k := r.cash.calls; len(k) != 2 || k[0].Key != k[1].Key {
-		t.Errorf("the repeats of step 1 must carry one key: %v", k)
+}
+
+// AC-WF2-11 and AC-WF2-02: a definitive 4xx of step 1 ends FAILED directly; the cash is not asked.
+func TestA_a_refused_income_is_not_looked_up(t *testing.T) {
+	r := newRig()
+	r.cash.incomeErr = rejection("NO_OPEN_CASH")
+
+	s, _, err := r.job.Start(context.Background(), command())
+
+	if err != nil || s.Status != saga.Failed || s.FailedStep != saga.RecordCashIncome {
+		t.Fatalf("saga %+v err %v", s, err)
+	}
+	if got := strings.Join(*r.journal, ","); got != "income" {
+		t.Errorf("calls = %s, want no read", got)
+	}
+}
+
+// AC-WF2-11 and norm section 5.8: the read fails too, so the saga does not guess. It ends FAILED for a person, and the
+// payment stays held because the income may exist (AC-WF2-10).
+func TestA_an_unknown_income_whose_lookup_fails_ends_failed_and_holds_the_payment(t *testing.T) {
+	r := newRig()
+	r.cash.incomeErr = errors.New("timeout awaiting the cash")
+	r.lookup.err = &saga.ParticipantError{Code: "PARTICIPANT_UNAVAILABLE", Message: "no answer from the participant"}
+
+	s, _, err := r.job.Start(context.Background(), command())
+
+	if err != nil || s.Status != saga.Failed || s.FailedStep != saga.RecordCashIncome || !s.HoldsPayment() {
+		t.Fatalf("saga %+v err %v", s, err)
+	}
+	if !strings.HasPrefix(s.FailureDetail, "INCOME_OUTCOME_UNKNOWN:") {
+		t.Errorf("detail = %q", s.FailureDetail)
+	}
+	if got := strings.Join(*r.journal, ","); got != "income,lookup:p-1" {
+		t.Errorf("calls = %s", got)
+	}
+	again := command()
+	again.IdempotencyKey = "key-register-0002"
+	if _, _, err := r.job.Start(context.Background(), again); !errors.Is(err, saga.ErrPaymentTaken) {
+		t.Errorf("a second start over the held payment: err %v", err)
 	}
 }
