@@ -2,6 +2,8 @@ package participants
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 
@@ -18,15 +20,31 @@ func NewReservations(baseURL string, cfg Config) *Reservations {
 	return &Reservations{newClient(baseURL, cfg)}
 }
 
-// NoValidatedPaymentLookup stands in for the read of a validated payment, which the commercial api does not serve yet
-// (G-WF2-7 of HU-WFL-002, docs #1039, PROPOSED). It always gives no answer, so an unclear step 2 ends FAILED for a person
-// and is never reversed on a guess. It is replaced by the real adapter when the route is in the commercial api.
-type NoValidatedPaymentLookup struct{}
+var _ out.ValidatedPaymentLookup = (*Reservations)(nil)
 
-var _ out.ValidatedPaymentLookup = NoValidatedPaymentLookup{}
-
-func (NoValidatedPaymentLookup) FindValidatedPayment(context.Context, string, string) (bool, error) {
-	return false, unknown("PAYMENT_LOOKUP_UNAVAILABLE", "the commercial api has no read of a validated payment yet")
+// FindValidatedPayment reads whether the payment is validated (getValidatedPayment, docs #1039; G-WF2-7 of HU-WFL-002). A 200
+// with the stored result means validated. Only a 404 with the NOT_FOUND code of the commercial api means "not validated"; any
+// other refusal, a 200 without the validated value or a read that keeps failing is no answer, so the saga never reverses an
+// income whose payment may be recorded.
+func (r *Reservations) FindValidatedPayment(ctx context.Context, tenantID, paymentID string) (bool, error) {
+	body, err := r.c.get(ctx, request{
+		path: "/api/v1/commercial-reservation/internal/tenants/" + url.PathEscape(tenantID) + "/payment-proofs/" +
+			url.PathEscape(paymentID) + "/validated-payment",
+		ok: []int{http.StatusOK},
+	})
+	var refused *saga.ParticipantError
+	if errors.As(err, &refused) && refused.Definitive && refused.Code == "NOT_FOUND" {
+		return false, nil
+	}
+	if err == nil {
+		var result struct {
+			ValidatedValueCents *int64 `json:"validatedValueCents"`
+		}
+		if err = json.Unmarshal(body, &result); err == nil && result.ValidatedValueCents != nil {
+			return true, nil
+		}
+	}
+	return false, unknown("PAYMENT_LOOKUP_FAILED", "the read of the validated payment gave no answer: "+codeOf(err))
 }
 
 // RecordValidatedPayment is idempotent by state: repeating it for a payment already validated answers 200.

@@ -222,14 +222,63 @@ func TestI_a_redirect_is_not_followed(t *testing.T) {
 	}
 }
 
-// G-WF2-7: until the commercial api serves the read of a validated payment, the lookup gives no answer (never "not
-// validated"), so an unclear step 2 is never reversed on a guess.
-func TestNoValidatedPaymentLookup_never_answers_not_validated(t *testing.T) {
-	found, err := participants.NoValidatedPaymentLookup{}.FindValidatedPayment(context.Background(), tenant, "p-1")
+const validatedRoute = "/api/v1/commercial-reservation/internal/tenants/" + tenant + "/payment-proofs/p-1/validated-payment"
 
-	var participant *saga.ParticipantError
-	if found || !errors.As(err, &participant) || participant.Definitive || participant.Code != "PAYMENT_LOOKUP_UNAVAILABLE" {
-		t.Errorf("FindValidatedPayment = %v %v", found, err)
+// AC-WF2-12, G-WF2-7 (docs #1039, getValidatedPayment): the payment is read with GET on the internal route of the tenant,
+// with the service credential and the correlation id, and without an Idempotency-Key (a read). A 200 means validated.
+func TestV_a_validated_payment_is_read_from_the_internal_route(t *testing.T) {
+	srv, stub := reader(t, http.StatusOK, `{"id":"p-1","validatedValueCents":150000}`)
+
+	validated, err := participants.NewReservations(srv.URL, cfg).FindValidatedPayment(ctx(), tenant, "p-1")
+
+	if err != nil || !validated {
+		t.Fatalf("FindValidatedPayment = %v %v", validated, err)
+	}
+	if stub.method != http.MethodGet || stub.path != validatedRoute {
+		t.Errorf("asked %s %s", stub.method, stub.path)
+	}
+	if stub.header.Get("Authorization") != "Bearer "+token || stub.header.Get("X-Correlation-Id") != "run-1234" ||
+		stub.header.Get("Idempotency-Key") != "" {
+		t.Errorf("headers = %v", stub.header)
+	}
+}
+
+// AC-WF2-12: a 404 NOT_FOUND of the commercial api, with its envelope, says the tenant has no validated payment with that id.
+func TestV_a_404_not_found_means_not_validated(t *testing.T) {
+	srv, _ := reader(t, http.StatusNotFound, `{"error":"NOT_FOUND","message":"No validated payment","traceId":"t"}`)
+
+	validated, err := participants.NewReservations(srv.URL, cfg).FindValidatedPayment(ctx(), tenant, "p-1")
+
+	if err != nil || validated {
+		t.Errorf("FindValidatedPayment = %v %v", validated, err)
+	}
+}
+
+// AC-WF2-12 and norm section 5.8: anything that is not a clear answer is no answer, never "not validated": a 404 without the
+// envelope (a wrong route), a 403, a 200 without the validated value, or a read that keeps failing.
+func TestV_a_read_without_a_clear_answer_is_no_answer(t *testing.T) {
+	cases := map[string]struct {
+		status int
+		body   string
+		calls  int32
+	}{
+		"404 without envelope": {http.StatusNotFound, `not here`, 1},
+		"403":                  {http.StatusForbidden, `{"error":"FORBIDDEN","message":"no"}`, 1},
+		"200 without value":    {http.StatusOK, `{"id":"p-1"}`, 1},
+		"503 every attempt":    {http.StatusServiceUnavailable, `{}`, 3},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv, stub := reader(t, c.status, c.body)
+
+			validated, err := participants.NewReservations(srv.URL, cfg).FindValidatedPayment(ctx(), tenant, "p-1")
+
+			var participant *saga.ParticipantError
+			if err == nil || validated || !errors.As(err, &participant) || participant.Definitive ||
+				participant.Code != "PAYMENT_LOOKUP_FAILED" || stub.calls.Load() != c.calls {
+				t.Errorf("FindValidatedPayment = %v %v after %d calls", validated, err, stub.calls.Load())
+			}
+		})
 	}
 }
 
