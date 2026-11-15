@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS workflow_register_payment.idx_register_payment_saga_status_updated_at;

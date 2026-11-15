@@ -1,0 +1,58 @@
+// Package out holds the ports the orchestrator needs: one per participant, and the saga store.
+package out
+
+import (
+	"context"
+	"time"
+
+	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/domain/saga"
+)
+
+// Call is what every participant call carries besides its data.
+type Call struct {
+	Key        string // Idempotency-Key: <saga>:<step>
+	OnBehalfOf string // the `sub` of the person who started the saga (ADR-004 D5)
+}
+
+// Cash is the participant of step 1 and of its compensation (cash-reporting, internal routes). An error that is not a
+// *saga.ParticipantError is treated as an unknown failure.
+type Cash interface {
+	RecordIncome(ctx context.Context, call Call, tenantID string, p saga.Payment) (movementID string, err error)
+	// ReverseIncome records a compensating movement; the income itself is never updated or deleted.
+	ReverseIncome(ctx context.Context, call Call, tenantID, movementID, reason string) error
+}
+
+// CashIncomeLookup reads whether the cash holds the income of a payment, after step 1 ended with an unknown outcome
+// (AC-WF2-11, option B). found=false means the cash answered that there is none; an error means the read itself gave
+// no answer, and the saga does not guess.
+type CashIncomeLookup interface {
+	FindIncome(ctx context.Context, tenantID, paymentID string) (movementID string, found bool, err error)
+}
+
+// ValidatedPaymentLookup reads whether the reservation holds the payment as validated, after step 2 ended with an unclear
+// outcome (AC-WF2-12, option B). found=false means the reservation answered that it is not validated; an error means the
+// read itself gave no answer, and the saga does not guess.
+type ValidatedPaymentLookup interface {
+	FindValidatedPayment(ctx context.Context, tenantID, paymentID string) (found bool, err error)
+}
+
+// Reservations is the participant of step 2 (commercial-reservation, internal route). It has no compensation.
+type Reservations interface {
+	RecordValidatedPayment(ctx context.Context, call Call, tenantID string, p saga.Payment) error
+}
+
+// Store persists the saga. Create inserts a RUNNING saga or, when the idempotency key exists in the tenant, returns that one
+// whatever the body,
+// with created=false. It answers saga.ErrPaymentTaken when another saga, with another key, holds the payment.
+type Store interface {
+	Create(ctx context.Context, s saga.Saga) (stored saga.Saga, created bool, err error)
+	// Save writes the saga if it is still the stored copy (same Version) and raises s.Version; otherwise it answers
+	// saga.ErrConflict (moved by another actor), saga.ErrEnded or saga.ErrNotFound.
+	Save(ctx context.Context, s *saga.Saga) error
+	Get(ctx context.Context, id string) (saga.Saga, error)
+	// ForPayment returns the saga of the tenant that holds the payment (saga.Saga.HoldsPayment), if there is one.
+	ForPayment(ctx context.Context, tenantID, paymentID string) (holder saga.Saga, found bool, err error)
+	// ClaimStale takes the RUNNING sagas not updated since before: it stamps them with now and raises their Version in
+	// one step, so no other caller takes the same saga, and returns them as taken.
+	ClaimStale(ctx context.Context, before, now time.Time) ([]saga.Saga, error)
+}
