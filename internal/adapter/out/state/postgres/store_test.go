@@ -31,6 +31,14 @@ func fresh(n int, key string, at time.Time) saga.Saga {
 			Medium: saga.MediumCash, AmountCents: 150000, BusinessDate: "2026-11-10", Concept: "Abono", ApprovedBy: person}}
 }
 
+// ownPayment is fresh with a payment of its own, for the tests of several sagas that are not about one payment: since one
+// saga holds a payment (AC-WF2-10), two sagas over the same payment are refused.
+func ownPayment(n int, key string, at time.Time) saga.Saga {
+	sg := fresh(n, key, at)
+	sg.Payment.PaymentID = fmt.Sprintf("00000000-0000-4000-8000-%012d", 900+n)
+	return sg
+}
+
 func newStore(t *testing.T) (*postgres.Store, *pgxpool.Pool) {
 	t.Helper()
 	pool := pgtest.Open(t)
@@ -69,7 +77,7 @@ func TestI_the_reason_is_stored_and_read_back_or_stays_empty(t *testing.T) {
 	with := fresh(1, "key-register-0001", t0)
 	with.Payment.Reason = "Amount verified in the bank"
 	mustCreate(t, s, with)
-	mustCreate(t, s, fresh(2, "key-register-0002", t0))
+	mustCreate(t, s, ownPayment(2, "key-register-0002", t0))
 
 	read, err := s.Get(ctx, with.ID)
 	if err != nil || read.Payment.Reason != "Amount verified in the bank" || read.Payment != with.Payment {
@@ -198,8 +206,8 @@ func TestI_Save_refuses_an_older_copy_an_ended_saga_and_an_unknown_one(t *testin
 func TestI_ClaimStale_takes_each_stale_saga_once(t *testing.T) {
 	s, _ := newStore(t)
 	mustCreate(t, s, fresh(1, "key-register-0001", t0))
-	mustCreate(t, s, fresh(2, "key-register-0002", t0.Add(10*time.Minute)))
-	done := fresh(3, "key-register-0003", t0)
+	mustCreate(t, s, ownPayment(2, "key-register-0002", t0.Add(10*time.Minute)))
+	done := ownPayment(3, "key-register-0003", t0)
 	mustCreate(t, s, done)
 	done.End(saga.Completed, "", "")
 	if err := s.Save(ctx, &done); err != nil {
