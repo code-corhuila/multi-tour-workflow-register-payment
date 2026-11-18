@@ -2,9 +2,12 @@ package main
 
 import (
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/code-corhuila/multi-tour-workflow-register-payment/internal/application/port/out"
 )
 
 const (
@@ -109,5 +112,24 @@ func TestC_TheConfigurationErrorsListTheVariablesInAStableOrder(t *testing.T) {
 		if _, again := loadConfig(env(map[string]string{"CASH_REPORTING_BASE_URL": "", "COMMERCIAL_RESERVATION_BASE_URL": ""})); again.Error() != first.Error() {
 			t.Fatalf("the error order changed: %q then %q", first, again)
 		}
+	}
+}
+
+// The saga bound must cover the worst path: every participant call of the outbound ports, each with every attempt.
+// The count is derived from the ports, so a new call that is not added to callsPerSaga fails here.
+func TestC_TheSagaBoundCoversEveryParticipantCallOfTheWorstPath(t *testing.T) {
+	worstCalls := reflect.TypeFor[out.Cash]().NumMethod() +
+		reflect.TypeFor[out.CashIncomeLookup]().NumMethod() +
+		reflect.TypeFor[out.ValidatedPaymentLookup]().NumMethod() +
+		reflect.TypeFor[out.Reservations]().NumMethod()
+	cfg, _ := loadConfig(env(nil))
+
+	worst := time.Duration(worstCalls*cfg.stepAttempts) * cfg.stepTimeout
+
+	if callsPerSaga != worstCalls {
+		t.Errorf("callsPerSaga is %d but the ports declare %d participant calls", callsPerSaga, worstCalls)
+	}
+	if bound := sagaBound(cfg); bound < worst+sagaMargin {
+		t.Errorf("bound %v is shorter than %d calls with every attempt (%v) plus the margin", bound, worstCalls, worst)
 	}
 }
