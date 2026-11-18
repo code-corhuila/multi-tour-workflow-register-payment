@@ -32,7 +32,7 @@ services:
   # The secrets come from env/<environment>.env of multi-tour-infra-postgres; the names inside the container are
   # those of .env.example. A variable left empty is refused by the service at start, by name, so the migrator
   # above can run without them. The public key file must be readable by user 10001 (mode 644: it is public).
-  # stop_grace_period outlasts the saga bound (70 s with the defaults) so a stop lets a running saga finish.
+  # stop_grace_period outlasts the saga bound (85 s with the defaults, 90 s with the shutdown grace) so a stop lets a running saga finish.
   workflow-register-payment:
     build:
       context: ..
@@ -55,7 +55,7 @@ services:
     volumes:
       - ${JWT_PUBLIC_KEY_PATH:-/dev/null}:/run/secrets/jwt_public.pem:ro
     networks: [platform]
-    stop_grace_period: 90s
+    stop_grace_period: 120s
     restart: unless-stopped
 
 networks:
