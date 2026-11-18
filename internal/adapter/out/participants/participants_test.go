@@ -352,3 +352,17 @@ func TestI_a_read_without_a_clear_answer_is_no_answer(t *testing.T) {
 		})
 	}
 }
+
+// The Project Lead note of 2026-11-14: only a network error, 429 and 5xx are retried; 408 and 425 are definitive 4xx.
+func TestI_408_and_425_are_definitive_and_not_retried(t *testing.T) {
+	for _, status := range []int{http.StatusRequestTimeout, http.StatusTooEarly} {
+		srv, stub := newStub(t, `{"cashMovementId":"mov-1"}`, status, http.StatusCreated)
+
+		_, err := participants.NewCash(srv.URL, cfg).RecordIncome(ctx(), call, tenant, payment())
+
+		var p *saga.ParticipantError
+		if !errors.As(err, &p) || !p.Definitive || stub.calls.Load() != 1 {
+			t.Errorf("%d: err %v calls %d", status, err, stub.calls.Load())
+		}
+	}
+}
