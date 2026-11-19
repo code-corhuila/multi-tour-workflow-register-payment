@@ -7,7 +7,15 @@ Governance and documentation live in [`multi-tour-docs`](https://github.com/code
 
 ## What it is
 
-The saga of HU-WFL-002 (ADR-004 D3): it records the income in the cash first, then records the validated payment in the reservation, and reverses the income with a compensating movement if the second step fails. Its state is saved after every step. Spec (PROPUESTO, not signed yet): `07-api/specs/commercial-reservation/multi-tour-workflow-register-payment/` in `multi-tour-docs`.
+The saga of HU-WFL-002 (ADR-004 D3): it records the income in the cash first, then records the validated payment in the reservation, and reverses the income with a compensating movement if the second step fails. Its state is saved after every step. Spec (APPROVED, signed 2026-11-14): `07-api/specs/commercial-reservation/multi-tour-workflow-register-payment/` in `multi-tour-docs`.
+
+It is implemented: the steps, the participant clients (cash-reporting and commercial-reservation) and the entry route.
+
+- Route: `POST /api/v1/sagas/register-payment` starts a saga (Bearer token of a Tenant Administrator or a Collaborator with the right, header `Idempotency-Key` of 8 to 128 characters, JSON body); `GET /api/v1/sagas/register-payment/{id}` reads its state; `GET /health`.
+- Idempotency key per tenant: the key is unique per tenant (`uq_register_payment_saga_tenant_idempotency_key`), so a repeated key returns the saga already started and never reveals another tenant's. Another saga for the same payment is answered `409 PAYMENT_ALREADY_REGISTERED`.
+- Retries: each participant call is retried with full jitter after a network failure, 429 or 5xx, up to `STEP_ATTEMPTS`; every write carries the step key as `Idempotency-Key`, so a retry is the same intention. Any other 4xx is a definitive rejection.
+- Option B: when the outcome of a step is unknown after the retries, the saga reads the participant before deciding. Unknown income: it asks the cash whether the income exists; unclear payment: it asks the reservation whether the payment is validated (validated completes, not validated reverses the income, no answer ends FAILED for a person).
+- Resume: a RUNNING saga not moved for longer than the saga bound is claimed and finished from its saved state; the sweep repeats every bound.
 
 ## How to start it
 
@@ -21,9 +29,9 @@ In PostgreSQL, schema `workflow_register_payment` of the single instance (ADR-00
 
 `gofmt -l .` must print nothing, then `go vet ./...` and `go test ./...` (Go 1.26). The same three run in `ci.yml` on pull requests to `develop` and `qa`, with a PostgreSQL service for `TEST_DATABASE_URL` and the `db-ci` script for the migrations.
 
-## What is missing
+The tests that touch the state store need a PostgreSQL: set `TEST_DATABASE_URL` to an instance whose user may create a database (they create a throwaway one and apply `db/01_ddl`); without it they are skipped locally and fail in the CI. `sh db/tests/db-ci.sh` builds the schema from an empty PostgreSQL, reruns it, rolls it back and rebuilds it.
 
-The steps, the participant clients and the entry route (`POST /api/v1/sagas/register-payment`) are tasks WF2-02 and WF2-03; the domain of the saga is part 3 of WF2-01.
+To try it by hand: start the saga as in "How to start it", then `curl -X POST http://<host>:8080/api/v1/sagas/register-payment -H "Authorization: Bearer <token>" -H "Idempotency-Key: <8 to 128 characters>" -H "Content-Type: application/json" -d @payment.json` from inside the platform network (the service publishes no port) and read the result with the `GET` of the returned id. The body fields are in `openapi/`.
 
 ## Branching
 
