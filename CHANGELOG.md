@@ -5,6 +5,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-11-18
+
+Cut 3 follow-up release. The entries below are the commits of pull request 50 merged into `qa` and re-applied to `release/3.1.0` with `git cherry-pick -x`; the heading of each group is the user story named in the pull request. The frozen head of `qa` is `f0e576283`.
+
+### Changed
+
+#### HU-WFL-002 - Register a payment across cash and reservations
+
+- The readme describes the implemented saga and the repository has a pull request template ([PR 50](https://github.com/code-corhuila/multi-tour-workflow-register-payment/pull/50))
+- The saga bound counts the five participant calls of a saga ([PR 50](https://github.com/code-corhuila/multi-tour-workflow-register-payment/pull/50))
+- The store tests run against PostgreSQL 18.6 ([PR 50](https://github.com/code-corhuila/multi-tour-workflow-register-payment/pull/50))
+
+### Fixed
+
+#### HU-WFL-002 - Register a payment across cash and reservations
+
+- A 408 or a 425 answer of a participant is a definitive answer and is no longer retried ([PR 50](https://github.com/code-corhuila/multi-tour-workflow-register-payment/pull/50))
+
 ## [3.0.0] - 2026-11-14
 
 Cut 3 release. Every entry below is a pull request merged into `qa` and re-applied to `release/3.0.0` with `git cherry-pick -x`; the heading of each group is the user story named in the pull request, and the entry is the title of the pull request without its type. The frozen head of `qa` is `65832482e2c182e15aef5ee6c4f4d706a95f80ed`.
