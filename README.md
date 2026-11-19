@@ -13,7 +13,7 @@ It is implemented: the steps, the participant clients (cash-reporting and commer
 
 - Route: `POST /api/v1/sagas/register-payment` starts a saga (Bearer token of a Tenant Administrator or a Collaborator with the right, header `Idempotency-Key` of 8 to 128 characters, JSON body); `GET /api/v1/sagas/register-payment/{id}` reads its state; `GET /health`.
 - Idempotency key per tenant: the key is unique per tenant (`uq_register_payment_saga_tenant_idempotency_key`), so a repeated key returns the saga already started and never reveals another tenant's. Another saga for the same payment is answered `409 PAYMENT_ALREADY_REGISTERED`.
-- Retries: each participant call is retried with full jitter after a network failure, 408, 425, 429 or 5xx, up to `STEP_ATTEMPTS`; every write carries the step key as `Idempotency-Key`, so a retry is the same intention. Any other 4xx is a definitive rejection.
+- Retries: each participant call is retried with full jitter after a network failure, 429 or 5xx, up to `STEP_ATTEMPTS`; every write carries the step key as `Idempotency-Key`, so a retry is the same intention. Any other 4xx is a definitive rejection.
 - Option B: when the outcome of a step is unknown after the retries, the saga reads the participant before deciding. Unknown income: it asks the cash whether the income exists; unclear payment: it asks the reservation whether the payment is validated (validated completes, not validated reverses the income, no answer ends FAILED for a person).
 - Resume: a RUNNING saga not moved for longer than the saga bound is claimed and finished from its saved state; the sweep repeats every bound.
 
